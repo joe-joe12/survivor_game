@@ -17,154 +17,38 @@ class GameScene extends Phaser.Scene {
         this.exp = 0;
         this.maxExp = 5;
         this.level = 1;
-        this.moveSpeed = 160;
-        this.pointerTouch = null;
+        this.moveSpeed = 180;
+        
+        // 地圖設定
+        this.mapSize = 2000;
+        
+        // 搖桿控制變數
+        this.joystickPointer = null;
+        this.joystickBasePos = { x: 0, y: 0 };
+        this.joystickDir = { x: 0, y: 0 };
     }
 
     create() {
-        const width = this.cameras.main.width;
-        const height = this.cameras.main.height;
+        // 1. 設定遊戲世界邊界 (2000x2000 大地圖)
+        this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
-        // 建立玩家 (藍色圓圈)
-        this.player = this.add.circle(width / 2, height / 2, 15, 0x00aaff);
-        this.physics.add.existing(this.player);
-        this.player.body.setCollideWorldBounds(true);
-
-        // 群組
-        this.enemies = this.physics.add.group();
-        this.bullets = this.physics.add.group();
-        this.gems = this.physics.add.group();
-
-        // 鍵盤輸入
-        this.cursors = this.input.keyboard.createCursorKeys();
-        this.wasd = this.input.keyboard.addKeys({
-            up: Phaser.Input.Keyboard.KeyCodes.W,
-            down: Phaser.Input.Keyboard.KeyCodes.S,
-            left: Phaser.Input.Keyboard.KeyCodes.A,
-            right: Phaser.Input.Keyboard.KeyCodes.D
-        });
-
-        // 螢幕觸控（手機搖桿邏輯）
-        this.input.on('pointerdown', (pointer) => { this.pointerTouch = pointer; });
-        this.input.on('pointermove', (pointer) => { if (pointer.isDown) this.pointerTouch = pointer; });
-        this.input.on('pointerup', () => { this.pointerTouch = null; });
-
-        // UI 顯示
-        this.uiText = this.add.text(16, 16, `等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}`, {
-            fontSize: '18px',
-            color: '#ffffff'
-        });
-
-        // 定時產生敵人與攻擊
-        this.time.addEvent({ delay: 800, callback: this.autoAttack, callbackScope: this, loop: true });
-        this.time.addEvent({ delay: 1000, callback: this.spawnEnemy, callbackScope: this, loop: true });
-
-        // 碰撞檢測
-        this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
-        this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
-    }
-
-    update() {
-        let vx = 0, vy = 0;
-
-        // 鍵盤移動
-        if (this.cursors.left.isDown || this.wasd.left.isDown) vx = -1;
-        if (this.cursors.right.isDown || this.wasd.right.isDown) vx = 1;
-        if (this.cursors.up.isDown || this.wasd.up.isDown) vy = -1;
-        if (this.cursors.down.isDown || this.wasd.down.isDown) vy = 1;
-
-        // 手機觸控拖拽移動
-        if (this.pointerTouch && this.pointerTouch.isDown) {
-            let dx = this.pointerTouch.x - this.player.x;
-            let dy = this.pointerTouch.y - this.player.y;
-            if (Math.hypot(dx, dy) > 10) {
-                let angle = Math.atan2(dy, dx);
-                vx = Math.cos(angle);
-                vy = Math.sin(angle);
-            }
+        // 2. 畫出背景棋盤格與邊界線
+        let bgGraphics = this.add.graphics();
+        let gridSize = 80;
+        bgGraphics.lineStyle(1, 0x333333, 0.8);
+        for (let x = 0; x <= this.mapSize; x += gridSize) {
+            bgGraphics.moveTo(x, 0);
+            bgGraphics.lineTo(x, this.mapSize);
         }
-
-        let vec = new Phaser.Math.Vector2(vx, vy).normalize().scale(this.moveSpeed);
-        this.player.body.setVelocity(vec.x, vec.y);
-
-        // 寶石磁鐵效果（距離玩家近時自動吸過來）
-        this.gems.getChildren().forEach(gem => {
-            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
-            if (dist < 100) {
-                this.physics.moveToObject(gem, this.player, 200);
-            }
-        });
-    }
-
-    autoAttack() {
-        let nearestEnemy = null;
-        let minDistance = Infinity;
-
-        this.enemies.getChildren().forEach(enemy => {
-            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
-            if (dist < minDistance) {
-                minDistance = dist;
-                nearestEnemy = enemy;
-            }
-        });
-
-        if (nearestEnemy) {
-            let bullet = this.add.circle(this.player.x, this.player.y, 5, 0xffff00);
-            this.physics.add.existing(bullet);
-            this.bullets.add(bullet);
-
-            let angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearestEnemy.x, nearestEnemy.y);
-            this.physics.velocityFromRotation(angle, 450, bullet.body);
-            this.time.delayedCall(2000, () => bullet.destroy());
+        for (let y = 0; y <= this.mapSize; y += gridSize) {
+            bgGraphics.moveTo(0, y);
+            bgGraphics.lineTo(this.mapSize, y);
         }
-    }
+        bgGraphics.strokePath();
+        
+        // 繪製地圖外圍邊框 (紅色危險線)
+        bgGraphics.lineStyle(6, 0xff2222, 1);
+        bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
-    spawnEnemy() {
-        let angle = Math.random() * Math.PI * 2;
-        let x = this.player.x + Math.cos(angle) * 400;
-        let y = this.player.y + Math.sin(angle) * 400;
-
-        let enemy = this.add.circle(x, y, 12, 0xff4444);
-        this.physics.add.existing(enemy);
-        this.enemies.add(enemy);
-
-        this.physics.moveToObject(enemy, this.player, 70);
-    }
-
-    hitEnemy(bullet, enemy) {
-        // 敵人死亡掉落經驗寶石 (綠色小點)
-        let gem = this.add.circle(enemy.x, enemy.y, 6, 0x00ff88);
-        this.physics.add.existing(gem);
-        this.gems.add(gem);
-
-        bullet.destroy();
-        enemy.destroy();
-    }
-
-    collectGem(player, gem) {
-        gem.destroy();
-        this.exp += 1;
-
-        if (this.exp >= this.maxExp) {
-            this.level += 1;
-            this.exp = 0;
-            this.maxExp = Math.floor(this.maxExp * 1.5);
-            this.moveSpeed += 10; // 升級增加玩家速度
-        }
-
-        this.uiText.setText(`等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}`);
-    }
-}
-
-const config = {
-    type: Phaser.AUTO,
-    width: window.innerWidth,
-    height: window.innerHeight,
-    physics: { default: 'arcade', arcade: { debug: false } },
-    scene: GameScene
-};
-
-new Phaser.Game(config);
-</script>
-</body>
-</html>
+        // 3. 建立玩家 (藍色圓圈)
+        this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x0
