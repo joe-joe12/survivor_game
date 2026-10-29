@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>幸存者類遊戲 MVP</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+    </style>
+</head>
+<body>
+<script>
+class GameScene extends Phaser.Scene {
+    constructor() {
+        super('GameScene');
+        this.score = 0;
+        this.level = 1;
+        this.attackInterval = 1000;
+        this.moveSpeed = 160;
+    }
+
+    preload() {}
+
+    create() {
+        // 建立玩家 (藍色圓圈)
+        this.player = this.add.circle(400, 300, 15, 0x00aaff);
+        this.physics.add.existing(this.player);
+        this.player.body.setCollideWorldBounds(true);
+
+        // 群組設定
+        this.enemies = this.physics.add.group();
+        this.bullets = this.physics.add.group();
+
+        // 鍵盤輸入
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.wasd = this.input.keyboard.addKeys({
+            up: Phaser.Input.Keyboard.KeyCodes.W,
+            down: Phaser.Input.Keyboard.KeyCodes.S,
+            left: Phaser.Input.Keyboard.KeyCodes.A,
+            right: Phaser.Input.Keyboard.KeyCodes.D
+        });
+
+        // UI 標籤
+        this.uiText = this.add.text(16, 16, '等級: 1 | 經驗: 0/5', { fontSize: '18px', color: '#fff' });
+
+        // 計時器：自動攻擊與生成敵人
+        this.time.addEvent({ delay: this.attackInterval, callback: this.autoAttack, callbackScope: this, loop: true });
+        this.time.addEvent({ delay: 1200, callback: this.spawnEnemy, callbackScope: this, loop: true });
+
+        // 碰撞偵測 (子彈 打 敵人)
+        this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+    }
+
+    update() {
+        // 玩家移動邏輯
+        let vx = 0, vy = 0;
+        if (this.cursors.left.isDown || this.wasd.left.isDown) vx = -1;
+        if (this.cursors.right.isDown || this.wasd.right.isDown) vx = 1;
+        if (this.cursors.up.isDown || this.wasd.up.isDown) vy = -1;
+        if (this.cursors.down.isDown || this.wasd.down.isDown) vy = 1;
+
+        let vec = new Phaser.Math.Vector2(vx, vy).normalize().scale(this.moveSpeed);
+        this.player.body.setVelocity(vec.x, vec.y);
+    }
+
+    autoAttack() {
+        let nearestEnemy = null;
+        let minDistance = Infinity;
+
+        this.enemies.getChildren().forEach(enemy => {
+            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearestEnemy = enemy;
+            }
+        });
+
+        if (nearestEnemy) {
+            let bullet = this.add.circle(this.player.x, this.player.y, 5, 0xffff00);
+            this.physics.add.existing(bullet);
+            this.bullets.add(bullet);
+
+            let angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearestEnemy.x, nearestEnemy.y);
+            this.physics.velocityFromRotation(angle, 400, bullet.body);
+
+            // 2 秒後銷毀子彈
+            this.time.delayedCall(2000, () => bullet.destroy());
+        }
+    }
+
+    spawnEnemy() {
+        let angle = Math.random() * Math.PI * 2;
+        let x = this.player.x + Math.cos(angle) * 400;
+        let y = this.player.y + Math.sin(angle) * 400;
+
+        let enemy = this.add.circle(x, y, 12, 0xff4444);
+        this.physics.add.existing(enemy);
+        this.enemies.add(enemy);
+
+        this.physics.moveToObject(enemy, this.player, 80);
+    }
+
+    hitEnemy(bullet, enemy) {
+        bullet.destroy();
+        enemy.destroy();
+
+        this.score += 1;
+        if (this.score >= this.level * 5) {
+            this.level += 1;
+            this.score = 0;
+            this.moveSpeed += 15;
+        }
+        this.uiText.setText(`等級: ${this.level} | 經驗: ${this.score}/${this.level * 5}`);
+    }
+}
+
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 600,
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: GameScene
+};
+
+new Phaser.Game(config);
+</script>
+</body>
+</html>
