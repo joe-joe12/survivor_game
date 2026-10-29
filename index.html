@@ -2,11 +2,12 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>寶可夢倖存者</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; }
     </style>
 </head>
 <body>
@@ -18,21 +19,18 @@ class GameScene extends Phaser.Scene {
         this.maxExp = 5;
         this.level = 1;
         this.moveSpeed = 180;
-        
-        // 地圖設定
         this.mapSize = 2000;
         
-        // 搖桿控制變數
         this.joystickPointer = null;
         this.joystickBasePos = { x: 0, y: 0 };
         this.joystickDir = { x: 0, y: 0 };
     }
 
     create() {
-        // 1. 設定遊戲世界邊界 (2000x2000 大地圖)
+        // 設定世界邊界
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
-        // 2. 畫出背景棋盤格與邊界線
+        // 畫網格背景與紅色邊框
         let bgGraphics = this.add.graphics();
         let gridSize = 80;
         bgGraphics.lineStyle(1, 0x333333, 0.8);
@@ -46,9 +44,21 @@ class GameScene extends Phaser.Scene {
         }
         bgGraphics.strokePath();
         
-        // 繪製地圖外圍邊框 (紅色危險線)
         bgGraphics.lineStyle(6, 0xff2222, 1);
         bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
-        // 3. 建立玩家 (藍色圓圈)
-        this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x0
+        // 玩家 (藍色圓圈)
+        this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff);
+        this.physics.add.existing(this.player);
+        this.player.body.setCollideWorldBounds(true);
+
+        // 攝影機跟隨
+        this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
+        this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+
+        // 虛擬搖桿 UI
+        this.joystickBase = this.add.circle(0, 0, 50, 0xffffff, 0.2).setScrollFactor(0).setDepth(100).setVisible(false);
+        this.joystickThumb = this.add.circle(0, 0, 25, 0xffffff, 0.6).setScrollFactor(0).setDepth(101).setVisible(false);
+
+        // 觸控事件
+        this.input.
