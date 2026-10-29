@@ -1,0 +1,10 @@
+# Godot 4 暫存與快取資料夾
+.godot/
+
+# 匯出建置資料夾
+build/
+bin/
+
+# 翻譯檔與日誌
+*.translation
+*.log
