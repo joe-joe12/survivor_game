@@ -56,11 +56,11 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 虛擬搖桿 UI
+        // 虛擬搖桿 UI (鎖定在 UI 層不隨世界滾動)
         this.joystickBase = this.add.circle(0, 0, 50, 0xffffff, 0.2).setScrollFactor(0).setDepth(100).setVisible(false);
         this.joystickThumb = this.add.circle(0, 0, 25, 0xffffff, 0.6).setScrollFactor(0).setDepth(101).setVisible(false);
 
-        // 觸控事件
+        // 觸控事件修正：使用 pointer.x (螢幕絕對座標)
         this.input.on('pointerdown', (pointer) => {
             this.joystickPointer = pointer;
             this.joystickBasePos = { x: pointer.x, y: pointer.y };
@@ -92,12 +92,15 @@ class GameScene extends Phaser.Scene {
             }
         });
 
-        this.input.on('pointerup', () => {
+        const resetJoystick = () => {
             this.joystickPointer = null;
             this.joystickDir = { x: 0, y: 0 };
             this.joystickBase.setVisible(false);
             this.joystickThumb.setVisible(false);
-        });
+        };
+
+        this.input.on('pointerup', resetJoystick);
+        this.input.on('pointerupoutside', resetJoystick);
 
         // 物件群組
         this.enemies = this.physics.add.group();
