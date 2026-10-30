@@ -61,4 +61,169 @@ class GameScene extends Phaser.Scene {
         this.joystickThumb = this.add.circle(0, 0, 25, 0xffffff, 0.6).setScrollFactor(0).setDepth(101).setVisible(false);
 
         // 觸控事件
-        this.input.
+        this.input.on('pointerdown', (pointer) => {
+            this.joystickPointer = pointer;
+            this.joystickBasePos = { x: pointer.x, y: pointer.y };
+            this.joystickBase.setPosition(pointer.x, pointer.y).setVisible(true);
+            this.joystickThumb.setPosition(pointer.x, pointer.y).setVisible(true);
+        });
+
+        this.input.on('pointermove', (pointer) => {
+            if (this.joystickPointer && pointer.id === this.joystickPointer.id) {
+                let dx = pointer.x - this.joystickBasePos.x;
+                let dy = pointer.y - this.joystickBasePos.y;
+                let dist = Math.hypot(dx, dy);
+                let maxDist = 50;
+
+                if (dist > 0) {
+                    let angle = Math.atan2(dy, dx);
+                    let clampDist = Math.min(dist, maxDist);
+                    
+                    this.joystickThumb.setPosition(
+                        this.joystickBasePos.x + Math.cos(angle) * clampDist,
+                        this.joystickBasePos.y + Math.sin(angle) * clampDist
+                    );
+
+                    this.joystickDir = {
+                        x: Math.cos(angle) * (clampDist / maxDist),
+                        y: Math.sin(angle) * (clampDist / maxDist)
+                    };
+                }
+            }
+        });
+
+        this.input.on('pointerup', () => {
+            this.joystickPointer = null;
+            this.joystickDir = { x: 0, y: 0 };
+            this.joystickBase.setVisible(false);
+            this.joystickThumb.setVisible(false);
+        });
+
+        // 物件群組
+        this.enemies = this.physics.add.group();
+        this.bullets = this.physics.add.group();
+        this.gems = this.physics.add.group();
+
+        // 鍵盤輸入相容
+        this.cursors = this.input.keyboard.createCursorKeys();
+
+        // UI 介面
+        this.uiText = this.add.text(16, 16, `等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}`, {
+            fontSize: '18px',
+            color: '#ffffff',
+            backgroundColor: '#00000088',
+            padding: { x: 10, y: 5 }
+        }).setScrollFactor(0).setDepth(200);
+
+        // 產生敵人與攻擊
+        this.time.addEvent({ delay: 800, callback: this.autoAttack, callbackScope: this, loop: true });
+        this.time.addEvent({ delay: 1000, callback: this.spawnEnemy, callbackScope: this, loop: true });
+
+        // 碰撞設定
+        this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+        this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
+    }
+
+    update() {
+        let vx = 0, vy = 0;
+
+        if (this.cursors.left.isDown) vx = -1;
+        if (this.cursors.right.isDown) vx = 1;
+        if (this.cursors.up.isDown) vy = -1;
+        if (this.cursors.down.isDown) vy = 1;
+
+        if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
+            vx = this.joystickDir.x;
+            vy = this.joystickDir.y;
+        }
+
+        let vec = new Phaser.Math.Vector2(vx, vy);
+        if (this.joystickDir.x === 0 && this.joystickDir.y === 0) {
+            vec.normalize();
+        }
+        vec.scale(this.moveSpeed);
+        
+        this.player.body.setVelocity(vec.x, vec.y);
+
+        this.gems.getChildren().forEach(gem => {
+            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
+            if (dist < 120) {
+                this.physics.moveToObject(gem, this.player, 220);
+            }
+        });
+    }
+
+    autoAttack() {
+        let nearestEnemy = null;
+        let minDistance = 400;
+
+        this.enemies.getChildren().forEach(enemy => {
+            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearestEnemy = enemy;
+            }
+        });
+
+        if (nearestEnemy) {
+            let bullet = this.add.circle(this.player.x, this.player.y, 5, 0xffff00);
+            this.physics.add.existing(bullet);
+            this.bullets.add(bullet);
+
+            let angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearestEnemy.x, nearestEnemy.y);
+            this.physics.velocityFromRotation(angle, 500, bullet.body);
+            this.time.delayedCall(2000, () => bullet.destroy());
+        }
+    }
+
+    spawnEnemy() {
+        let angle = Math.random() * Math.PI * 2;
+        let spawnDist = 450;
+        let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * spawnDist, 50, this.mapSize - 50);
+        let y = Phaser.Math.Clamp(this.player.y + Math.sin(angle) * spawnDist, 50, this.mapSize - 50);
+
+        let enemy = this.add.circle(x, y, 12, 0xff4444);
+        this.physics.add.existing(enemy);
+        this.enemies.add(enemy);
+
+        this.physics.moveToObject(enemy, this.player, 80);
+    }
+
+    hitEnemy(bullet, enemy) {
+        let gem = this.add.circle(enemy.x, enemy.y, 6, 0x00ff88);
+        this.physics.add.existing(gem);
+        this.gems.add(gem);
+
+        bullet.destroy();
+        enemy.destroy();
+    }
+
+    collectGem(player, gem) {
+        gem.destroy();
+        this.exp += 1;
+
+        if (this.exp >= this.maxExp) {
+            this.level += 1;
+            this.exp = 0;
+            this.maxExp = Math.floor(this.maxExp * 1.5);
+            this.moveSpeed += 12;
+        }
+
+        this.uiText.setText(`等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}`);
+    }
+}
+
+const config = {
+    type: Phaser.AUTO,
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: GameScene
+};
+
+new Phaser.Game(config);
+</script>
+</body>
+</html>
