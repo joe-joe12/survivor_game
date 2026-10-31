@@ -2,34 +2,19 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>寶可夢倖存者</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        * {
-            margin: 0; padding: 0; box-sizing: border-box;
-            touch-action: none !important;
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-        html, body {
-            width: 100%; height: 100%;
-            overflow: hidden; background: #000;
-            position: fixed; top: 0; left: 0;
-        }
-        #canvas-container { width: 100vw; height: 100vh; position: relative; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+        #canvas-container { width: 100vw; height: 100vh; }
     </style>
 </head>
 <body>
 <div id="canvas-container"></div>
 
 <script>
-// 強制禁止手機頁面下拉重新整理與橡皮筋滾動效果
-document.body.addEventListener('touchmove', function(e) {
-    e.preventDefault();
-}, { passive: false });
-
 class GameScene extends Phaser.Scene {
     constructor() {
         super('GameScene');
@@ -43,8 +28,7 @@ class GameScene extends Phaser.Scene {
         
         this.isUpgrading = false;
         this.joystickDir = { x: 0, y: 0 };
-        this.activeTouchId = null;
-        this.keyState = { w: false, a: false, s: false, d: false, up: false, down: false, left: false, right: false };
+        this.touchPointer = null;
     }
 
     create() {
@@ -64,7 +48,7 @@ class GameScene extends Phaser.Scene {
         bgGraphics.lineStyle(6, 0xff2222, 1);
         bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
-        // 玩家
+        // 玩家 (藍色圓圈)
         this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff);
         this.physics.add.existing(this.player);
         this.player.body.setCollideWorldBounds(true);
@@ -73,15 +57,47 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 左下角搖桿 UI
-        this.baseX = 100;
-        this.baseY = window.innerHeight - 100;
-        this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.25).setScrollFactor(0).setDepth(100);
-        this.joystickThumb = this.add.circle(this.baseX, this.baseY, 25, 0xffffff, 0.65).setScrollFactor(0).setDepth(101);
+        // 電腦鍵盤輸入 (WASD + 方向鍵)
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.wasd = this.input.keyboard.addKeys({
+            up: Phaser.Input.Keyboard.KeyCodes.W,
+            down: Phaser.Input.Keyboard.KeyCodes.S,
+            left: Phaser.Input.Keyboard.KeyCodes.A,
+            right: Phaser.Input.Keyboard.KeyCodes.D
+        });
 
-        // 綁定輸入
-        this.setupKeyboard();
-        this.setupTouch();
+        // 手機左下角搖桿 UI
+        this.baseX = 120;
+        this.baseY = this.cameras.main.height - 120;
+        this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.2).setScrollFactor(0).setDepth(100);
+        this.joystickThumb = this.add.circle(this.baseX, this.baseY, 25, 0xffffff, 0.5).setScrollFactor(0).setDepth(101);
+
+        // 觸控監聽
+        this.input.on('pointerdown', (pointer) => {
+            if (this.isUpgrading) return;
+            if (pointer.x < this.cameras.main.width / 2) {
+                this.touchPointer = pointer;
+                this.updateJoystick(pointer);
+            }
+        });
+
+        this.input.on('pointermove', (pointer) => {
+            if (this.isUpgrading || !this.touchPointer) return;
+            if (pointer.id === this.touchPointer.id) {
+                this.updateJoystick(pointer);
+            }
+        });
+
+        const resetTouch = (pointer) => {
+            if (this.touchPointer && pointer.id === this.touchPointer.id) {
+                this.touchPointer = null;
+                this.joystickDir = { x: 0, y: 0 };
+                this.joystickThumb.setPosition(this.baseX, this.baseY);
+            }
+        };
+
+        this.input.on('pointerup', resetTouch);
+        this.input.on('pointerupoutside', resetTouch);
 
         // 物件組
         this.enemies = this.physics.add.group();
@@ -102,74 +118,9 @@ class GameScene extends Phaser.Scene {
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
     }
 
-    setupKeyboard() {
-        window.addEventListener('keydown', (e) => {
-            let key = e.key.toLowerCase();
-            if (key === 'w' || key === 'arrowup') this.keyState.up = true;
-            if (key === 's' || key === 'arrowdown') this.keyState.down = true;
-            if (key === 'a' || key === 'arrowleft') this.keyState.left = true;
-            if (key === 'd' || key === 'arrowright') this.keyState.right = true;
-        });
-
-        window.addEventListener('keyup', (e) => {
-            let key = e.key.toLowerCase();
-            if (key === 'w' || key === 'arrowup') this.keyState.up = false;
-            if (key === 's' || key === 'arrowdown') this.keyState.down = false;
-            if (key === 'a' || key === 'arrowleft') this.keyState.left = false;
-            if (key === 'd' || key === 'arrowright') this.keyState.right = false;
-        });
-    }
-
-    setupTouch() {
-        const forceReset = () => {
-            this.activeTouchId = null;
-            this.joystickDir = { x: 0, y: 0 };
-            this.joystickThumb.setPosition(this.baseX, this.baseY);
-            if (this.player && this.player.body) {
-                this.player.body.setVelocity(0, 0);
-            }
-        };
-
-        window.addEventListener('touchstart', (e) => {
-            if (this.isUpgrading) return;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                let t = e.changedTouches[i];
-                if (t.clientX < window.innerWidth * 0.6 && this.activeTouchId === null) {
-                    this.activeTouchId = t.identifier;
-                    this.updateJoystick(t.clientX, t.clientY);
-                    break;
-                }
-            }
-        }, { passive: false });
-
-        window.addEventListener('touchmove', (e) => {
-            if (this.isUpgrading || this.activeTouchId === null) return;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                let t = e.changedTouches[i];
-                if (t.identifier === this.activeTouchId) {
-                    this.updateJoystick(t.clientX, t.clientY);
-                    break;
-                }
-            }
-        }, { passive: false });
-
-        window.addEventListener('touchend', (e) => {
-            if (this.activeTouchId === null) return;
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                if (e.changedTouches[i].identifier === this.activeTouchId) {
-                    forceReset();
-                    break;
-                }
-            }
-        }, { passive: false });
-
-        window.addEventListener('touchcancel', forceReset, { passive: false });
-        window.addEventListener('blur', forceReset);
-    }
-
-    updateJoystick(clientX, clientY) {
-        let dx = clientX - this.baseX;
-        let dy = clientY - this.baseY;
+    updateJoystick(pointer) {
+        let dx = pointer.x - this.baseX;
+        let dy = pointer.y - this.baseY;
         let dist = Math.hypot(dx, dy);
         let maxDist = 50;
 
@@ -199,27 +150,28 @@ class GameScene extends Phaser.Scene {
 
         let vx = 0, vy = 0;
 
-        // 1. 鍵盤判定
-        if (this.keyState.left) vx -= 1;
-        if (this.keyState.right) vx += 1;
-        if (this.keyState.up) vy -= 1;
-        if (this.keyState.down) vy += 1;
+        // 1. 電腦鍵盤讀取
+        if (this.cursors.left.isDown || this.wasd.left.isDown) vx -= 1;
+        if (this.cursors.right.isDown || this.wasd.right.isDown) vx += 1;
+        if (this.cursors.up.isDown || this.wasd.up.isDown) vy -= 1;
+        if (this.cursors.down.isDown || this.wasd.down.isDown) vy += 1;
 
-        // 2. 搖桿判定 (覆蓋鍵盤)
+        // 2. 搖桿覆蓋
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
             vx = this.joystickDir.x;
             vy = this.joystickDir.y;
         }
 
-        let vec = new Phaser.Math.Vector2(vx, vy);
+        // 計算向量並設定速度
+        let moveVec = new Phaser.Math.Vector2(vx, vy);
         if (this.joystickDir.x === 0 && this.joystickDir.y === 0 && (vx !== 0 || vy !== 0)) {
-            vec.normalize();
+            moveVec.normalize();
         }
-        vec.scale(this.moveSpeed);
-        
-        this.player.body.setVelocity(vec.x, vec.y);
+        moveVec.scale(this.moveSpeed);
 
-        // 寶石磁鐵
+        this.player.body.setVelocity(moveVec.x, moveVec.y);
+
+        // 寶石吸引
         this.gems.getChildren().forEach(gem => {
             let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
             if (dist < 120) {
@@ -297,7 +249,7 @@ class GameScene extends Phaser.Scene {
     showUpgradeMenu() {
         this.isUpgrading = true;
         this.physics.pause();
-        this.activeTouchId = null;
+        this.touchPointer = null;
         this.joystickDir = { x: 0, y: 0 };
         this.joystickThumb.setPosition(this.baseX, this.baseY);
         this.player.body.setVelocity(0, 0);
@@ -354,10 +306,6 @@ const config = {
     parent: 'canvas-container',
     width: window.innerWidth,
     height: window.innerHeight,
-    scale: {
-        mode: Phaser.Scale.RESIZE,
-        autoCenter: Phaser.Scale.CENTER_BOTH
-    },
     physics: { default: 'arcade', arcade: { debug: false } },
     scene: GameScene
 };
