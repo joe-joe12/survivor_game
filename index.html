@@ -2,12 +2,22 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>寶可夢倖存者</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; -webkit-user-select: none; user-select: none; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+        * {
+            margin: 0; padding: 0; box-sizing: border-box;
+            touch-action: none !important;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden; background: #000;
+            position: fixed; top: 0; left: 0;
+        }
         #canvas-container { width: 100vw; height: 100vh; position: relative; }
     </style>
 </head>
@@ -15,6 +25,11 @@
 <div id="canvas-container"></div>
 
 <script>
+// 強制禁止手機頁面下拉重新整理與橡皮筋滾動效果
+document.body.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+}, { passive: false });
+
 class GameScene extends Phaser.Scene {
     constructor() {
         super('GameScene');
@@ -29,25 +44,23 @@ class GameScene extends Phaser.Scene {
         this.isUpgrading = false;
         this.joystickDir = { x: 0, y: 0 };
         this.activeTouchId = null;
+        this.keyState = { w: false, a: false, s: false, d: false, up: false, down: false, left: false, right: false };
     }
 
     create() {
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
-        // 背景棋盤與紅框
+        // 背景網格與紅框
         let bgGraphics = this.add.graphics();
         let gridSize = 80;
         bgGraphics.lineStyle(1, 0x333333, 0.8);
         for (let x = 0; x <= this.mapSize; x += gridSize) {
-            bgGraphics.moveTo(x, 0);
-            bgGraphics.lineTo(x, this.mapSize);
+            bgGraphics.moveTo(x, 0); bgGraphics.lineTo(x, this.mapSize);
         }
         for (let y = 0; y <= this.mapSize; y += gridSize) {
-            bgGraphics.moveTo(0, y);
-            bgGraphics.lineTo(this.mapSize, y);
+            bgGraphics.moveTo(0, y); bgGraphics.lineTo(this.mapSize, y);
         }
         bgGraphics.strokePath();
-        
         bgGraphics.lineStyle(6, 0xff2222, 1);
         bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
@@ -60,23 +73,15 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 鍵盤支援 (WASD + 方向鍵)
-        this.cursors = this.input.keyboard.createCursorKeys();
-        this.wasd = this.input.keyboard.addKeys({
-            up: Phaser.Input.Keyboard.KeyCodes.W,
-            down: Phaser.Input.Keyboard.KeyCodes.S,
-            left: Phaser.Input.Keyboard.KeyCodes.A,
-            right: Phaser.Input.Keyboard.KeyCodes.D
-        });
-
-        // 固定 UI 搖桿 (左下角)
+        // 左下角搖桿 UI
         this.baseX = 100;
         this.baseY = window.innerHeight - 100;
         this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.25).setScrollFactor(0).setDepth(100);
         this.joystickThumb = this.add.circle(this.baseX, this.baseY, 25, 0xffffff, 0.65).setScrollFactor(0).setDepth(101);
 
-        // 初始化全域防卡死監聽
-        this.setupNativeTouch();
+        // 綁定輸入
+        this.setupKeyboard();
+        this.setupTouch();
 
         // 物件組
         this.enemies = this.physics.add.group();
@@ -85,10 +90,7 @@ class GameScene extends Phaser.Scene {
 
         // UI
         this.uiText = this.add.text(16, 16, `等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}\n傷害: ${this.attackDamage} | 速度: ${this.moveSpeed}`, {
-            fontSize: '16px',
-            color: '#ffffff',
-            backgroundColor: '#00000088',
-            padding: { x: 10, y: 5 }
+            fontSize: '16px', color: '#ffffff', backgroundColor: '#00000088', padding: { x: 10, y: 5 }
         }).setScrollFactor(0).setDepth(200);
 
         // 計時器
@@ -100,8 +102,26 @@ class GameScene extends Phaser.Scene {
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
     }
 
-    setupNativeTouch() {
-        const resetJoystick = () => {
+    setupKeyboard() {
+        window.addEventListener('keydown', (e) => {
+            let key = e.key.toLowerCase();
+            if (key === 'w' || key === 'arrowup') this.keyState.up = true;
+            if (key === 's' || key === 'arrowdown') this.keyState.down = true;
+            if (key === 'a' || key === 'arrowleft') this.keyState.left = true;
+            if (key === 'd' || key === 'arrowright') this.keyState.right = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            let key = e.key.toLowerCase();
+            if (key === 'w' || key === 'arrowup') this.keyState.up = false;
+            if (key === 's' || key === 'arrowdown') this.keyState.down = false;
+            if (key === 'a' || key === 'arrowleft') this.keyState.left = false;
+            if (key === 'd' || key === 'arrowright') this.keyState.right = false;
+        });
+    }
+
+    setupTouch() {
+        const forceReset = () => {
             this.activeTouchId = null;
             this.joystickDir = { x: 0, y: 0 };
             this.joystickThumb.setPosition(this.baseX, this.baseY);
@@ -114,45 +134,46 @@ class GameScene extends Phaser.Scene {
             if (this.isUpgrading) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 let t = e.changedTouches[i];
-                if (t.clientX < window.innerWidth / 2 && this.activeTouchId === null) {
+                if (t.clientX < window.innerWidth * 0.6 && this.activeTouchId === null) {
                     this.activeTouchId = t.identifier;
-                    this.updateJoystickPos(t.clientX, t.clientY);
+                    this.updateJoystick(t.clientX, t.clientY);
                     break;
                 }
             }
-        }, { passive: true });
+        }, { passive: false });
 
         window.addEventListener('touchmove', (e) => {
             if (this.isUpgrading || this.activeTouchId === null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 let t = e.changedTouches[i];
                 if (t.identifier === this.activeTouchId) {
-                    this.updateJoystickPos(t.clientX, t.clientY);
+                    this.updateJoystick(t.clientX, t.clientY);
                     break;
                 }
             }
-        }, { passive: true });
+        }, { passive: false });
 
         window.addEventListener('touchend', (e) => {
+            if (this.activeTouchId === null) return;
             for (let i = 0; i < e.changedTouches.length; i++) {
                 if (e.changedTouches[i].identifier === this.activeTouchId) {
-                    resetJoystick();
+                    forceReset();
                     break;
                 }
             }
-        }, { passive: true });
+        }, { passive: false });
 
-        window.addEventListener('touchcancel', resetJoystick, { passive: true });
-        window.addEventListener('blur', resetJoystick);
+        window.addEventListener('touchcancel', forceReset, { passive: false });
+        window.addEventListener('blur', forceReset);
     }
 
-    updateJoystickPos(clientX, clientY) {
+    updateJoystick(clientX, clientY) {
         let dx = clientX - this.baseX;
         let dy = clientY - this.baseY;
         let dist = Math.hypot(dx, dy);
         let maxDist = 50;
 
-        if (dist > 0) {
+        if (dist > 5) {
             let angle = Math.atan2(dy, dx);
             let clampDist = Math.min(dist, maxDist);
 
@@ -161,12 +182,9 @@ class GameScene extends Phaser.Scene {
                 this.baseY + Math.sin(angle) * clampDist
             );
 
-            // 加上 Safe Guard 避免出現 NaN
-            let dirX = Math.cos(angle) * (clampDist / maxDist);
-            let dirY = Math.sin(angle) * (clampDist / maxDist);
             this.joystickDir = {
-                x: isNaN(dirX) ? 0 : dirX,
-                y: isNaN(dirY) ? 0 : dirY
+                x: Math.cos(angle) * (clampDist / maxDist),
+                y: Math.sin(angle) * (clampDist / maxDist)
             };
         } else {
             this.joystickDir = { x: 0, y: 0 };
@@ -181,13 +199,13 @@ class GameScene extends Phaser.Scene {
 
         let vx = 0, vy = 0;
 
-        // 1. 鍵盤輸入
-        if (this.cursors.left.isDown || this.wasd.left.isDown) vx = -1;
-        if (this.cursors.right.isDown || this.wasd.right.isDown) vx = 1;
-        if (this.cursors.up.isDown || this.wasd.up.isDown) vy = -1;
-        if (this.cursors.down.isDown || this.wasd.down.isDown) vy = 1;
+        // 1. 鍵盤判定
+        if (this.keyState.left) vx -= 1;
+        if (this.keyState.right) vx += 1;
+        if (this.keyState.up) vy -= 1;
+        if (this.keyState.down) vy += 1;
 
-        // 2. 手機搖桿輸入
+        // 2. 搖桿判定 (覆蓋鍵盤)
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
             vx = this.joystickDir.x;
             vy = this.joystickDir.y;
