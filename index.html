@@ -124,7 +124,6 @@ class GameScene extends Phaser.Scene {
         // 碰撞設定
         this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
-        // 敵人撞到玩家觸發 Game Over
         this.physics.add.overlap(this.player, this.enemies, this.triggerGameOver, null, this);
     }
 
@@ -200,8 +199,17 @@ class GameScene extends Phaser.Scene {
         });
 
         if (nearestEnemy) {
-            let bullet = this.add.circle(this.player.x, this.player.y, 8, 0xffff00).setDepth(150);
+            // 將子彈半徑從 8 加大到 18，並設為 150 圖層
+            let bullet = this.add.circle(this.player.x, this.player.y, 18, 0xffff00).setDepth(150);
+            
+            // 為大子彈加上橘紅色外邊框，使其更有質感
+            bullet.setStrokeStyle(3, 0xff6600);
+
             this.physics.add.existing(bullet);
+            
+            // 放大碰撞體區域以符合新的子彈尺寸
+            bullet.body.setCircle(18);
+
             bullet.damage = this.attackDamage;
             this.bullets.add(bullet);
 
@@ -257,7 +265,6 @@ class GameScene extends Phaser.Scene {
         this.isGameOver = true;
         this.physics.pause();
 
-        // 顯示在最上層 (Depth 999) 的大字樣
         this.add.text(this.cameras.main.width / 2, 50, 'GAME OVER!\n(點擊畫面重新開始)', {
             fontSize: '28px',
             color: '#ff2222',
