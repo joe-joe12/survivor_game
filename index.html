@@ -34,8 +34,8 @@ class GameScene extends Phaser.Scene {
     create() {
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
-        // 背景網格與紅框
-        let bgGraphics = this.add.graphics();
+        // 背景網格 (Depth 0)
+        let bgGraphics = this.add.graphics().setDepth(0);
         let gridSize = 80;
         bgGraphics.lineStyle(1, 0x333333, 0.8);
         for (let x = 0; x <= this.mapSize; x += gridSize) {
@@ -48,8 +48,8 @@ class GameScene extends Phaser.Scene {
         bgGraphics.lineStyle(6, 0xff2222, 1);
         bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
-        // 玩家 (藍色圓圈)
-        this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff);
+        // 玩家 (Depth 10)
+        this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff).setDepth(10);
         this.physics.add.existing(this.player);
         this.player.body.setCollideWorldBounds(true);
 
@@ -57,7 +57,7 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 電腦鍵盤輸入 (WASD + 方向鍵)
+        // 鍵盤輸入 (WASD + 方向鍵)
         this.cursors = this.input.keyboard.createCursorKeys();
         this.wasd = this.input.keyboard.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -66,13 +66,13 @@ class GameScene extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D
         });
 
-        // 手機左下角搖桿 UI
+        // 手機搖桿 (Depth 100+)
         this.baseX = 120;
         this.baseY = this.cameras.main.height - 120;
         this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.2).setScrollFactor(0).setDepth(100);
         this.joystickThumb = this.add.circle(this.baseX, this.baseY, 25, 0xffffff, 0.5).setScrollFactor(0).setDepth(101);
 
-        // 觸控監聽
+        // 觸控事件
         this.input.on('pointerdown', (pointer) => {
             if (this.isUpgrading) return;
             if (pointer.x < this.cameras.main.width / 2) {
@@ -104,7 +104,7 @@ class GameScene extends Phaser.Scene {
         this.bullets = this.physics.add.group();
         this.gems = this.physics.add.group();
 
-        // UI
+        // UI (Depth 200)
         this.uiText = this.add.text(16, 16, `等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}\n傷害: ${this.attackDamage} | 速度: ${this.moveSpeed}`, {
             fontSize: '16px', color: '#ffffff', backgroundColor: '#00000088', padding: { x: 10, y: 5 }
         }).setScrollFactor(0).setDepth(200);
@@ -113,7 +113,7 @@ class GameScene extends Phaser.Scene {
         this.attackTimer = this.time.addEvent({ delay: this.attackDelay, callback: this.autoAttack, callbackScope: this, loop: true });
         this.time.addEvent({ delay: 1000, callback: this.spawnEnemy, callbackScope: this, loop: true });
 
-        // 碰撞
+        // 碰撞設定
         this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
     }
@@ -150,13 +150,11 @@ class GameScene extends Phaser.Scene {
 
         let vx = 0, vy = 0;
 
-        // 電腦鍵盤讀取
         if (this.cursors.left.isDown || this.wasd.left.isDown) vx -= 1;
         if (this.cursors.right.isDown || this.wasd.right.isDown) vx += 1;
         if (this.cursors.up.isDown || this.wasd.up.isDown) vy -= 1;
         if (this.cursors.down.isDown || this.wasd.down.isDown) vy += 1;
 
-        // 搖桿覆蓋
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
             vx = this.joystickDir.x;
             vy = this.joystickDir.y;
@@ -170,7 +168,6 @@ class GameScene extends Phaser.Scene {
 
         this.player.body.setVelocity(moveVec.x, moveVec.y);
 
-        // 寶石吸引
         this.gems.getChildren().forEach(gem => {
             let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
             if (dist < 120) {
@@ -182,7 +179,7 @@ class GameScene extends Phaser.Scene {
     autoAttack() {
         if (this.isUpgrading) return;
         let nearestEnemy = null;
-        let minDistance = 1000; // 超長射程範圍
+        let minDistance = 1000;
 
         this.enemies.getChildren().forEach(enemy => {
             let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
@@ -193,7 +190,8 @@ class GameScene extends Phaser.Scene {
         });
 
         if (nearestEnemy) {
-            let bullet = this.add.circle(this.player.x, this.player.y, 6, 0xffff00);
+            // 建立顯眼的螢光黃色子彈，並強制將 Depth 設定為 150 (高於背景與玩家)
+            let bullet = this.add.circle(this.player.x, this.player.y, 8, 0xffff00).setDepth(150);
             this.physics.add.existing(bullet);
             bullet.damage = this.attackDamage;
             this.bullets.add(bullet);
@@ -211,7 +209,8 @@ class GameScene extends Phaser.Scene {
         let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * spawnDist, 50, this.mapSize - 50);
         let y = Phaser.Math.Clamp(this.player.y + Math.sin(angle) * spawnDist, 50, this.mapSize - 50);
 
-        let enemy = this.add.circle(x, y, 12, 0xff4444);
+        // 敵人設定在 Depth 10
+        let enemy = this.add.circle(x, y, 12, 0xff4444).setDepth(10);
         this.physics.add.existing(enemy);
         enemy.hp = 1;
         this.enemies.add(enemy);
@@ -224,7 +223,7 @@ class GameScene extends Phaser.Scene {
         bullet.destroy();
 
         if (enemy.hp <= 0) {
-            let gem = this.add.circle(enemy.x, enemy.y, 6, 0x00ff88);
+            let gem = this.add.circle(enemy.x, enemy.y, 6, 0x00ff88).setDepth(5);
             this.physics.add.existing(gem);
             this.gems.add(gem);
             enemy.destroy();
