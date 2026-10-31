@@ -150,19 +150,18 @@ class GameScene extends Phaser.Scene {
 
         let vx = 0, vy = 0;
 
-        // 1. 電腦鍵盤讀取
+        // 電腦鍵盤讀取
         if (this.cursors.left.isDown || this.wasd.left.isDown) vx -= 1;
         if (this.cursors.right.isDown || this.wasd.right.isDown) vx += 1;
         if (this.cursors.up.isDown || this.wasd.up.isDown) vy -= 1;
         if (this.cursors.down.isDown || this.wasd.down.isDown) vy += 1;
 
-        // 2. 搖桿覆蓋
+        // 搖桿覆蓋
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
             vx = this.joystickDir.x;
             vy = this.joystickDir.y;
         }
 
-        // 計算向量並設定速度
         let moveVec = new Phaser.Math.Vector2(vx, vy);
         if (this.joystickDir.x === 0 && this.joystickDir.y === 0 && (vx !== 0 || vy !== 0)) {
             moveVec.normalize();
@@ -183,7 +182,7 @@ class GameScene extends Phaser.Scene {
     autoAttack() {
         if (this.isUpgrading) return;
         let nearestEnemy = null;
-        let minDistance = 400;
+        let minDistance = 1000; // 超長射程範圍
 
         this.enemies.getChildren().forEach(enemy => {
             let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
@@ -194,14 +193,14 @@ class GameScene extends Phaser.Scene {
         });
 
         if (nearestEnemy) {
-            let bullet = this.add.circle(this.player.x, this.player.y, 5, 0xffff00);
+            let bullet = this.add.circle(this.player.x, this.player.y, 6, 0xffff00);
             this.physics.add.existing(bullet);
             bullet.damage = this.attackDamage;
             this.bullets.add(bullet);
 
             let angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearestEnemy.x, nearestEnemy.y);
-            this.physics.velocityFromRotation(angle, 500, bullet.body);
-            this.time.delayedCall(2000, () => bullet.destroy());
+            this.physics.velocityFromRotation(angle, 600, bullet.body);
+            this.time.delayedCall(3000, () => bullet.destroy());
         }
     }
 
