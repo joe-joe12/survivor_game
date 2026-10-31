@@ -28,7 +28,7 @@ class GameScene extends Phaser.Scene {
         
         this.isUpgrading = false;
         this.joystickDir = { x: 0, y: 0 };
-        this.joystickPointer = null;
+        this.activeTouchId = null;
     }
 
     create() {
@@ -60,7 +60,7 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 1. 修復電腦鍵盤支援 (方向鍵 + WASD)
+        // 鍵盤支援 (WASD + 方向鍵)
         this.cursors = this.input.keyboard.createCursorKeys();
         this.wasd = this.input.keyboard.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -69,13 +69,14 @@ class GameScene extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D
         });
 
-        // 2. 螢幕搖桿 UI（固定在左下角，穩定度最高）
-        this.joystickBase = this.add.circle(100, window.innerHeight - 100, 50, 0xffffff, 0.2)
-            .setScrollFactor(0).setDepth(100);
-        this.joystickThumb = this.add.circle(100, window.innerHeight - 100, 25, 0xffffff, 0.6)
-            .setScrollFactor(0).setDepth(101);
+        // 固定 UI 搖桿 (左下角)
+        this.baseX = 100;
+        this.baseY = window.innerHeight - 100;
+        this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.25).setScrollFactor(0).setDepth(100);
+        this.joystickThumb = this.add.circle(this.baseX, this.baseY, 25, 0xffffff, 0.65).setScrollFactor(0).setDepth(101);
 
-        this.setupTouchControls();
+        // 初始化全域防卡死監聽
+        this.setupNativeTouch();
 
         // 物件組
         this.enemies = this.physics.add.group();
@@ -99,41 +100,55 @@ class GameScene extends Phaser.Scene {
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
     }
 
-    setupTouchControls() {
-        // 使用 Phaser 原生 Input，並以左下角搖桿中心為基準計算
-        this.input.on('pointerdown', (pointer) => {
-            if (this.isUpgrading) return;
-            // 只要點擊螢幕左半邊，就啟用搖桿
-            if (pointer.x < window.innerWidth / 2) {
-                this.joystickPointer = pointer;
-                this.updateJoystick(pointer);
-            }
-        });
-
-        this.input.on('pointermove', (pointer) => {
-            if (this.isUpgrading || !this.joystickPointer) return;
-            if (pointer.id === this.joystickPointer.id) {
-                this.updateJoystick(pointer);
-            }
-        });
-
-        const stopJoystick = (pointer) => {
-            if (this.joystickPointer && pointer.id === this.joystickPointer.id) {
-                this.joystickPointer = null;
-                this.joystickDir = { x: 0, y: 0 };
-                this.joystickThumb.setPosition(100, window.innerHeight - 100);
+    setupNativeTouch() {
+        const resetJoystick = () => {
+            this.activeTouchId = null;
+            this.joystickDir = { x: 0, y: 0 };
+            this.joystickThumb.setPosition(this.baseX, this.baseY);
+            if (this.player && this.player.body) {
+                this.player.body.setVelocity(0, 0);
             }
         };
 
-        this.input.on('pointerup', stopJoystick);
-        this.input.on('pointerupoutside', stopJoystick);
+        window.addEventListener('touchstart', (e) => {
+            if (this.isUpgrading) return;
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                let t = e.changedTouches[i];
+                if (t.clientX < window.innerWidth / 2 && this.activeTouchId === null) {
+                    this.activeTouchId = t.identifier;
+                    this.updateJoystickPos(t.clientX, t.clientY);
+                    break;
+                }
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchmove', (e) => {
+            if (this.isUpgrading || this.activeTouchId === null) return;
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                let t = e.changedTouches[i];
+                if (t.identifier === this.activeTouchId) {
+                    this.updateJoystickPos(t.clientX, t.clientY);
+                    break;
+                }
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === this.activeTouchId) {
+                    resetJoystick();
+                    break;
+                }
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchcancel', resetJoystick, { passive: true });
+        window.addEventListener('blur', resetJoystick);
     }
 
-    updateJoystick(pointer) {
-        let baseX = 100;
-        let baseY = window.innerHeight - 100;
-        let dx = pointer.x - baseX;
-        let dy = pointer.y - baseY;
+    updateJoystickPos(clientX, clientY) {
+        let dx = clientX - this.baseX;
+        let dy = clientY - this.baseY;
         let dist = Math.hypot(dx, dy);
         let maxDist = 50;
 
@@ -142,14 +157,19 @@ class GameScene extends Phaser.Scene {
             let clampDist = Math.min(dist, maxDist);
 
             this.joystickThumb.setPosition(
-                baseX + Math.cos(angle) * clampDist,
-                baseY + Math.sin(angle) * clampDist
+                this.baseX + Math.cos(angle) * clampDist,
+                this.baseY + Math.sin(angle) * clampDist
             );
 
+            // 加上 Safe Guard 避免出現 NaN
+            let dirX = Math.cos(angle) * (clampDist / maxDist);
+            let dirY = Math.sin(angle) * (clampDist / maxDist);
             this.joystickDir = {
-                x: Math.cos(angle) * (clampDist / maxDist),
-                y: Math.sin(angle) * (clampDist / maxDist)
+                x: isNaN(dirX) ? 0 : dirX,
+                y: isNaN(dirY) ? 0 : dirY
             };
+        } else {
+            this.joystickDir = { x: 0, y: 0 };
         }
     }
 
@@ -161,13 +181,13 @@ class GameScene extends Phaser.Scene {
 
         let vx = 0, vy = 0;
 
-        // 電腦鍵盤邏輯 (WASD / 方向鍵)
+        // 1. 鍵盤輸入
         if (this.cursors.left.isDown || this.wasd.left.isDown) vx = -1;
         if (this.cursors.right.isDown || this.wasd.right.isDown) vx = 1;
         if (this.cursors.up.isDown || this.wasd.up.isDown) vy = -1;
         if (this.cursors.down.isDown || this.wasd.down.isDown) vy = 1;
 
-        // 手機搖桿邏輯 (若有搖桿輸入則優先覆蓋)
+        // 2. 手機搖桿輸入
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) {
             vx = this.joystickDir.x;
             vy = this.joystickDir.y;
@@ -181,7 +201,7 @@ class GameScene extends Phaser.Scene {
         
         this.player.body.setVelocity(vec.x, vec.y);
 
-        // 寶石吸引
+        // 寶石磁鐵
         this.gems.getChildren().forEach(gem => {
             let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
             if (dist < 120) {
@@ -259,8 +279,9 @@ class GameScene extends Phaser.Scene {
     showUpgradeMenu() {
         this.isUpgrading = true;
         this.physics.pause();
-        this.joystickPointer = null;
+        this.activeTouchId = null;
         this.joystickDir = { x: 0, y: 0 };
+        this.joystickThumb.setPosition(this.baseX, this.baseY);
         this.player.body.setVelocity(0, 0);
 
         let overlay = this.add.rectangle(0, 0, this.cameras.main.width * 2, this.cameras.main.height * 2, 0x000000, 0.75)
