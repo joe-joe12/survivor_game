@@ -27,11 +27,15 @@ class GameScene extends Phaser.Scene {
         this.mapSize = 2000;
         
         this.isUpgrading = false;
+        this.isGameOver = false;
         this.joystickDir = { x: 0, y: 0 };
         this.touchPointer = null;
     }
 
     create() {
+        this.isGameOver = false;
+        this.isUpgrading = false;
+
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
         // 背景網格 (Depth 0)
@@ -74,6 +78,10 @@ class GameScene extends Phaser.Scene {
 
         // 觸控事件
         this.input.on('pointerdown', (pointer) => {
+            if (this.isGameOver) {
+                this.scene.restart();
+                return;
+            }
             if (this.isUpgrading) return;
             if (pointer.x < this.cameras.main.width / 2) {
                 this.touchPointer = pointer;
@@ -82,7 +90,7 @@ class GameScene extends Phaser.Scene {
         });
 
         this.input.on('pointermove', (pointer) => {
-            if (this.isUpgrading || !this.touchPointer) return;
+            if (this.isGameOver || this.isUpgrading || !this.touchPointer) return;
             if (pointer.id === this.touchPointer.id) {
                 this.updateJoystick(pointer);
             }
@@ -116,6 +124,8 @@ class GameScene extends Phaser.Scene {
         // 碰撞設定
         this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
         this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
+        // 敵人撞到玩家觸發 Game Over
+        this.physics.add.overlap(this.player, this.enemies, this.triggerGameOver, null, this);
     }
 
     updateJoystick(pointer) {
@@ -143,7 +153,7 @@ class GameScene extends Phaser.Scene {
     }
 
     update() {
-        if (this.isUpgrading) {
+        if (this.isGameOver || this.isUpgrading) {
             this.player.body.setVelocity(0, 0);
             return;
         }
@@ -177,7 +187,7 @@ class GameScene extends Phaser.Scene {
     }
 
     autoAttack() {
-        if (this.isUpgrading) return;
+        if (this.isGameOver || this.isUpgrading) return;
         let nearestEnemy = null;
         let minDistance = 1000;
 
@@ -190,7 +200,6 @@ class GameScene extends Phaser.Scene {
         });
 
         if (nearestEnemy) {
-            // 建立顯眼的螢光黃色子彈，並強制將 Depth 設定為 150 (高於背景與玩家)
             let bullet = this.add.circle(this.player.x, this.player.y, 8, 0xffff00).setDepth(150);
             this.physics.add.existing(bullet);
             bullet.damage = this.attackDamage;
@@ -203,13 +212,12 @@ class GameScene extends Phaser.Scene {
     }
 
     spawnEnemy() {
-        if (this.isUpgrading) return;
+        if (this.isGameOver || this.isUpgrading) return;
         let angle = Math.random() * Math.PI * 2;
         let spawnDist = 450;
         let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * spawnDist, 50, this.mapSize - 50);
         let y = Phaser.Math.Clamp(this.player.y + Math.sin(angle) * spawnDist, 50, this.mapSize - 50);
 
-        // 敵人設定在 Depth 10
         let enemy = this.add.circle(x, y, 12, 0xff4444).setDepth(10);
         this.physics.add.existing(enemy);
         enemy.hp = 1;
@@ -242,6 +250,22 @@ class GameScene extends Phaser.Scene {
         }
 
         this.updateUI();
+    }
+
+    triggerGameOver(player, enemy) {
+        if (this.isGameOver) return;
+        this.isGameOver = true;
+        this.physics.pause();
+
+        // 顯示在最上層 (Depth 999) 的大字樣
+        this.add.text(this.cameras.main.width / 2, 50, 'GAME OVER!\n(點擊畫面重新開始)', {
+            fontSize: '28px',
+            color: '#ff2222',
+            fontStyle: 'bold',
+            align: 'center',
+            backgroundColor: '#000000cc',
+            padding: { x: 20, y: 10 }
+        }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(999);
     }
 
     showUpgradeMenu() {
