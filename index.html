@@ -28,6 +28,7 @@ class GameScene extends Phaser.Scene {
         
         this.isUpgrading = false;
         this.isGameOver = false;
+        this.isInvincible = true; // 新增開局無敵狀態
         this.joystickDir = { x: 0, y: 0 };
         this.touchPointer = null;
     }
@@ -35,6 +36,7 @@ class GameScene extends Phaser.Scene {
     create() {
         this.isGameOver = false;
         this.isUpgrading = false;
+        this.isInvincible = true;
 
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
@@ -56,6 +58,11 @@ class GameScene extends Phaser.Scene {
         this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff).setDepth(10);
         this.physics.add.existing(this.player);
         this.player.body.setCollideWorldBounds(true);
+
+        // 開局 2 秒無敵保護（避免開局被秒殺）
+        this.time.delayedCall(2000, () => {
+            this.isInvincible = false;
+        });
 
         // 攝影機
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
@@ -119,7 +126,7 @@ class GameScene extends Phaser.Scene {
 
         // 計時器
         this.attackTimer = this.time.addEvent({ delay: this.attackDelay, callback: this.autoAttack, callbackScope: this, loop: true });
-        this.time.addEvent({ delay: 1000, callback: this.spawnEnemy, callbackScope: this, loop: true });
+        this.time.addEvent({ delay: 1200, callback: this.spawnEnemy, callbackScope: this, loop: true });
 
         // 碰撞設定
         this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
@@ -199,15 +206,9 @@ class GameScene extends Phaser.Scene {
         });
 
         if (nearestEnemy) {
-            // 將子彈半徑從 8 加大到 18，並設為 150 圖層
             let bullet = this.add.circle(this.player.x, this.player.y, 18, 0xffff00).setDepth(150);
-            
-            // 為大子彈加上橘紅色外邊框，使其更有質感
             bullet.setStrokeStyle(3, 0xff6600);
-
             this.physics.add.existing(bullet);
-            
-            // 放大碰撞體區域以符合新的子彈尺寸
             bullet.body.setCircle(18);
 
             bullet.damage = this.attackDamage;
@@ -221,8 +222,10 @@ class GameScene extends Phaser.Scene {
 
     spawnEnemy() {
         if (this.isGameOver || this.isUpgrading) return;
+        
+        // 確保敵人強制產生在視野外（半徑 550~650 像素外）
         let angle = Math.random() * Math.PI * 2;
-        let spawnDist = 450;
+        let spawnDist = Phaser.Math.Between(550, 650);
         let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * spawnDist, 50, this.mapSize - 50);
         let y = Phaser.Math.Clamp(this.player.y + Math.sin(angle) * spawnDist, 50, this.mapSize - 50);
 
@@ -231,7 +234,8 @@ class GameScene extends Phaser.Scene {
         enemy.hp = 1;
         this.enemies.add(enemy);
 
-        this.physics.moveToObject(enemy, this.player, 80);
+        // 敵人緩慢往玩家移動（速度降為 60）
+        this.physics.moveToObject(enemy, this.player, 60);
     }
 
     hitEnemy(bullet, enemy) {
@@ -261,7 +265,7 @@ class GameScene extends Phaser.Scene {
     }
 
     triggerGameOver(player, enemy) {
-        if (this.isGameOver) return;
+        if (this.isGameOver || this.isInvincible) return; // 無敵時間內不會死亡
         this.isGameOver = true;
         this.physics.pause();
 
