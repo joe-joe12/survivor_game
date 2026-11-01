@@ -8,14 +8,24 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; touch-action: none; }
+#game { width: 100vw; height: 100vh; }
+/* 錯誤訊息列（除錯用） */
 #err { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999; background: rgba(180,0,0,.9); color: #fff;
        font: 12px monospace; padding: 6px 10px; display: none; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
+/* 直向時蓋住畫面的「請轉橫向」提示（手機、電腦視窗太窄時都適用） */
+#rot { position: fixed; inset: 0; z-index: 10000; background: #05070f; color: #cfe0ff; display: none;
+       flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+       font: bold 22px "Noto Sans TC","Microsoft JhengHei","PingFang TC",sans-serif; text-align: center; padding: 20px; }
+#rot .ic { font-size: 72px; animation: spin 2.4s ease-in-out infinite; }
+@keyframes spin { 0%,30% { transform: rotate(0); } 70%,100% { transform: rotate(-90deg); } }
 </style>
 </head>
 <body>
 <div id="game"></div>
 <div id="err"></div>
+<div id="rot"><div class="ic">📱</div><div>請將裝置轉為橫向後再遊玩</div><div style="font-size:14px;color:#7f93b8;font-weight:normal">（電腦請把瀏覽器視窗拉成寬大於高）</div></div>
 <script>
+// 錯誤顯示：把執行期錯誤印在畫面底部，方便在手機上除錯
 (function () {
     const box = document.getElementById('err');
     const show = (m) => { box.style.display = 'block'; box.textContent += m + '\n'; };
@@ -23,10 +33,31 @@ html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; to
     window.addEventListener('unhandledrejection', (e) => show('Promise: ' + e.reason));
 })();
 
-// ================= 設定區 =================
-const BASE_ENEMY_HP = 5;
-const HP_GROWTH_SEC = 75;     // 敵人血量每過 N 秒 +100%
-const DMG_GROWTH_SEC = 150;   // 敵人傷害每過 N 秒 +100%
+// ============================================================
+//  全域字型：所有 Phaser 文字預設套用較美觀的中文字型
+// ============================================================
+const FONT = '"Noto Sans TC","Microsoft JhengHei","PingFang TC","Heiti TC",sans-serif';
+(function () {
+    const proto = Phaser.GameObjects.GameObjectFactory.prototype, _text = proto.text;
+    proto.text = function (x, y, t, st) { return _text.call(this, x, y, t, Object.assign({ fontFamily: FONT }, st)); };
+})();
+
+// ============================================================
+//  設定區（數值都集中在這裡，方便調整）
+// ============================================================
+const W = 960, H = 540;          // 固定的遊戲解析度（橫向 16:9），實際畫面用 FIT 等比縮放到整個視窗
+const START_TICKETS = 9999;      // 一開始的抽獎券（方便測試）
+const START_COINS = 3000;        // 一開始的金幣（方便測試養成，不需要可改 0）
+const BASE_ENEMY_HP = 5;         // 小怪基礎血量
+const HP_GROWTH_SEC = 75;        // 敵人血量每過 N 秒 +100%
+const DMG_GROWTH_SEC = 150;      // 敵人傷害每過 N 秒 +100%
+const GRAV = 85;                 // 星球引力基準（半徑 90 的星球表面處拉力，px/s）
+const RIFT_CHECK_SEC = 30;       // 每隔幾秒判定一次是否出現裂縫
+const RIFT_CHANCE = 0.2;         // 每次判定出現裂縫的機率（20%）
+const RIFT_LIFE = 30000;         // 裂縫存在時間（毫秒）
+const BOSS_HP_MUL = 15;          // BOSS 血量 = 小怪基礎血量 × 此倍率 × 時間成長
+const BOSS_LEVELS = 5;           // 擊敗 BOSS 增加的等級數
+const SELL_PRICE = [20, 60, 180, 450, 1200];   // 重複的項目賣掉可得金幣（依稀有度）
 
 // 稀有度：w = 抽中權重（保底：連續 29 次沒出史詩以上，第 30 抽必出史詩以上）
 const RAR = [
@@ -35,25 +66,51 @@ const RAR = [
 ];
 const hex = (c) => '#' + c.toString(16).padStart(6, '0');
 
-// 角色（r = 稀有度索引）。史詩以上有特殊機制，數值差距刻意壓小，以機制取勝而不是碾壓
+// ------------------------------------------------------------
+//  角色（r = 稀有度索引）
+//  innate = 角色天生就有技能；沒有 innate 的角色要在「養成」把技能升到 Lv1 才會習得
+//  sk.txt(level) = 技能在該等級的效果說明（也用於養成畫面）
+// ------------------------------------------------------------
 const CHARACTERS = [
-    { name: '曉光', r: 0, color: 0x4fd1ff, sides: 6, rot: -Math.PI / 2, ey: 0, hp: 100, speed: 180, dmg: 1.0, delay: 800, range: 450, desc: '均衡型，沒有短板' },
-    { name: '岩盾', r: 0, color: 0x8899bb, sides: 4, rot: -Math.PI / 4, ey: 0, hp: 150, speed: 160, dmg: 0.9, delay: 800, range: 440, desc: '血量厚，速度較慢' },
-    { name: '燼火', r: 1, color: 0xff6644, sides: 4, rot: -Math.PI / 2, ey: 0, angry: true, hp: 80, speed: 170, dmg: 1.4, delay: 900, range: 400, desc: '高傷害，但血量低' },
-    { name: '翠風', r: 1, color: 0x66dd88, sides: 3, rot: -Math.PI / 2, ey: 5, hp: 100, speed: 175, dmg: 1.0, delay: 850, range: 560, desc: '射程最遠' },
-    { name: '影行', r: 2, color: 0xb455ff, sides: 5, rot: -Math.PI / 2, ey: 1, hp: 90, speed: 195, dmg: 1.1, delay: 780, range: 430, trait: 'dodge', desc: '【閃避】20% 機率完全閃開傷害' },
-    { name: '星環', r: 3, color: 0xffd24a, sides: 8, rot: Math.PI / 8, ey: 0, hp: 110, speed: 180, dmg: 1.1, delay: 800, range: 450, trait: 'nova', desc: '【星爆】每 10 秒釋放衝擊波，傷害範圍內敵人並清除敵彈' },
-    { name: '終焉', r: 4, color: 0xff3b6b, sides: 10, rot: 0, ey: 0, angry: true, hp: 100, speed: 185, dmg: 1.2, delay: 780, range: 470, trait: 'frenzy', desc: '【狂暴】每擊殺 20 隻，5 秒內傷害 +40%、攻速 +33%' }
+    { name: '曉光', r: 0, color: 0x4fd1ff, sides: 6, rot: -Math.PI / 2, ey: 0, hp: 100, speed: 180, dmg: 1.0, delay: 800, range: 450, desc: '均衡型，沒有短板',
+      trait: 'heal', sk: { name: '曙光', txt: l => l ? `每 15 秒回復 ${(4 + l * 1.2).toFixed(1)}% 最大血量` : '尚未習得（升到 Lv1 習得）' } },
+    { name: '岩盾', r: 0, color: 0x8899bb, sides: 4, rot: -Math.PI / 4, ey: 0, hp: 150, speed: 160, dmg: 0.9, delay: 800, range: 440, desc: '血量厚，速度較慢',
+      trait: 'thorn', sk: { name: '震盪反擊', txt: l => l ? `受傷時釋放衝擊波（傷害 ×${(1 + 0.35 * l).toFixed(2)}，冷卻 4 秒）` : '尚未習得（升到 Lv1 習得）' } },
+    { name: '燼火', r: 1, color: 0xff6644, sides: 4, rot: -Math.PI / 2, ey: 0, angry: true, hp: 80, speed: 170, dmg: 1.4, delay: 900, range: 400, desc: '高傷害，但血量低',
+      trait: 'rage', sk: { name: '怒焰', txt: l => l ? `血量低於 50% 時傷害 +${8 + 3 * l}%` : '尚未習得（升到 Lv1 習得）' } },
+    { name: '翠風', r: 1, color: 0x66dd88, sides: 3, rot: -Math.PI / 2, ey: 5, hp: 100, speed: 175, dmg: 1.0, delay: 850, range: 560, desc: '射程最遠',
+      trait: 'gale', sk: { name: '風之加護', txt: l => l ? `每 8 秒疾風 2.5 秒，移速 +${20 + 4 * l}%` : '尚未習得（升到 Lv1 習得）' } },
+    { name: '影行', r: 2, color: 0xb455ff, sides: 5, rot: -Math.PI / 2, ey: 1, hp: 90, speed: 195, dmg: 1.1, delay: 780, range: 430, trait: 'dodge', innate: true, desc: '【閃避】20% 機率完全閃開傷害',
+      sk: { name: '閃避', txt: l => `閃避率 ${20 + 2 * l}%` } },
+    { name: '星環', r: 3, color: 0xffd24a, sides: 8, rot: Math.PI / 8, ey: 0, hp: 110, speed: 180, dmg: 1.1, delay: 800, range: 450, trait: 'nova', innate: true, desc: '【星爆】每 10 秒釋放衝擊波，傷害範圍內敵人並清除敵彈',
+      sk: { name: '星爆', txt: l => `每 ${(10 - 0.4 * l).toFixed(1)} 秒星爆，傷害 ×${(2.5 + 0.25 * l).toFixed(2)}，半徑 ${200 + 8 * l}` } },
+    { name: '終焉', r: 4, color: 0xff3b6b, sides: 10, rot: 0, ey: 0, angry: true, hp: 100, speed: 185, dmg: 1.2, delay: 780, range: 470, trait: 'frenzy', innate: true, desc: '【狂暴】每擊殺 20 隻，5 秒內傷害 +40%、攻速 +33%',
+      sk: { name: '狂暴', txt: l => `每殺 ${Math.max(10, 20 - l)} 隻，狂暴 ${(5 + 0.3 * l).toFixed(1)} 秒，傷害 +${40 + 2 * l}%` } }
 ];
-// 武器：type 決定行為，n = 數量/穿透/彈射/環繞數；excl = 專武角色，該角色裝備時 傷害 ×1.25 且 n+1
+
+// ------------------------------------------------------------
+//  武器：type 決定行為，n = 數量/穿透/彈射/環繞數
+//  excl = 專武角色（該角色裝備時 傷害 ×1.25 且 n+1）
+//  spec = 這把武器「專屬」的可升級項目：
+//     kind 'count'  → 增加數量（散彈發數、環繞星數量、光束道數…）
+//     kind 'pierce' → 增加穿透（div 表示每 div 級才 +1）
+//     kind 'chain'  → 增加彈射次數
+// ------------------------------------------------------------
 const WEAPONS = [
-    { name: '基礎彈', r: 0, ic: '🔹', type: 'shot',   n: 1, dmg: 1.0, delay: 1.0, excl: 0, desc: '單發，鎖定最近敵人' },
-    { name: '散射彈', r: 0, ic: '✴️', type: 'shot',   n: 3, dmg: 0.5, delay: 1.1, excl: 1, desc: '三發扇形散射' },
-    { name: '雙發彈', r: 1, ic: '🔸', type: 'shot',   n: 2, dmg: 0.7, delay: 1.0, excl: 2, desc: '兩發並列' },
-    { name: '穿透箭', r: 1, ic: '🏹', type: 'pierce', n: 2, dmg: 0.9, delay: 1.1, excl: 3, desc: '高速，可穿透 2 隻敵人' },
-    { name: '彈射珠', r: 2, ic: '🔮', type: 'chain',  n: 2, dmg: 0.9, delay: 1.0, excl: 4, desc: '命中後彈射到附近敵人 2 次' },
-    { name: '環繞星', r: 3, ic: '🌟', type: 'orbit',  n: 2, dmg: 0.7, delay: 1.0, excl: 5, desc: '2 顆星環繞身邊，碰到敵人就傷害' },
-    { name: '終焉光束', r: 4, ic: '☄️', type: 'beam', n: 1, dmg: 1.6, delay: 3.0, excl: 6, desc: '每 2.4 秒射出貫穿光束，打穿整條線' }
+    { name: '基礎彈', r: 0, ic: '🔹', type: 'shot',   n: 1, dmg: 1.0, delay: 1.0, excl: 0, desc: '單發，鎖定最近敵人',
+      spec: { kind: 'pierce', div: 3, name: '穿透彈芯', max: 6, cost: 60, txt: l => `子彈可穿透 ${Math.floor(l / 3)} 隻敵人（每 3 級 +1）` } },
+    { name: '散射彈', r: 0, ic: '✴️', type: 'shot',   n: 3, dmg: 0.5, delay: 1.1, excl: 1, desc: '三發扇形散射',
+      spec: { kind: 'count', name: '散彈增加', max: 4, cost: 70, txt: l => `散彈 +${l} 發（共 ${3 + l} 發）` } },
+    { name: '雙發彈', r: 1, ic: '🔸', type: 'shot',   n: 2, dmg: 0.7, delay: 1.0, excl: 2, desc: '兩發並列',
+      spec: { kind: 'count', name: '追加彈', max: 3, cost: 70, txt: l => `並列 +${l} 發（共 ${2 + l} 發）` } },
+    { name: '穿透箭', r: 1, ic: '🏹', type: 'pierce', n: 2, dmg: 0.9, delay: 1.1, excl: 3, desc: '高速，可穿透 2 隻敵人',
+      spec: { kind: 'pierce', name: '穿透數', max: 4, cost: 70, txt: l => `穿透 +${l} 隻（共 ${2 + l} 隻）` } },
+    { name: '彈射珠', r: 2, ic: '🔮', type: 'chain',  n: 2, dmg: 0.9, delay: 1.0, excl: 4, desc: '命中後彈射到附近敵人 2 次',
+      spec: { kind: 'chain', name: '彈射次數', max: 4, cost: 80, txt: l => `彈射 +${l} 次（共 ${2 + l} 次）` } },
+    { name: '環繞星', r: 3, ic: '🌟', type: 'orbit',  n: 2, dmg: 0.7, delay: 1.0, excl: 5, desc: '2 顆星環繞身邊，碰到敵人就傷害',
+      spec: { kind: 'count', name: '星星數量', max: 4, cost: 90, txt: l => `環繞星 +${l} 顆（共 ${2 + l} 顆）` } },
+    { name: '終焉光束', r: 4, ic: '☄️', type: 'beam', n: 1, dmg: 1.6, delay: 3.0, excl: 6, desc: '每 2.4 秒射出貫穿光束，打穿整條線',
+      spec: { kind: 'count', name: '光束道數', max: 3, cost: 100, txt: l => `光束 +${l} 道（共 ${1 + l} 道，均分方向）` } }
 ];
 // 被動：只能裝備一個
 const PASSIVES = [
@@ -75,6 +132,26 @@ const CATS = [
 const TOTAL = CHARACTERS.length + WEAPONS.length + PASSIVES.length;
 const MILESTONES = [{ n: 4, t: 1 }, { n: 8, t: 1 }, { n: 12, t: 2 }, { n: 16, t: 2 }, { n: 20, t: 3 }, { n: TOTAL, t: 5 }];
 
+// ------------------------------------------------------------
+//  局外成長：養成項目定義
+//  cost = 第 1 級的基礎花費；第 n 級花費 = cost × (1 + 0.8 × 已有等級)
+// ------------------------------------------------------------
+const CSTATS = [   // 每個角色獨立計算的能力
+    { k: 'atk',  name: '攻擊',     ic: '⚔️', max: 20, cost: 40, txt: l => `傷害 +${l * 5}%` },
+    { k: 'def',  name: '防禦',     ic: '🛡️', max: 15, cost: 50, txt: l => `每次受傷 -${(l * 0.4).toFixed(1)} 點（至少 1）` },
+    { k: 'red',  name: '減傷',     ic: '💠', max: 20, cost: 60, txt: l => `受到傷害 -${(l * 1.5).toFixed(1)}%` },
+    { k: 'spd',  name: '移速',     ic: '👟', max: 15, cost: 35, txt: l => `移動速度 +${l * 2}%` },
+    { k: 'crit', name: '暴擊機率', ic: '🎯', max: 25, cost: 45, txt: l => `暴擊率 ${5 + l * 2}%` },
+    { k: 'cdmg', name: '暴擊傷害', ic: '💥', max: 20, cost: 45, txt: l => `暴擊傷害 ${150 + l * 5}%` }
+];
+const SKILL_MAX = 10, SKILL_COST = 120;          // 角色技能等級上限 / 基礎花費
+const WSTATS = [   // 每把武器獨立計算的通用能力（另外還有 WEAPONS[].spec 專屬項目）
+    { k: 'rate',  name: '射速',     ic: '🔫', max: 12, cost: 45, txt: l => `攻擊間隔 -${Math.round((1 - 1 / (1 + 0.05 * l)) * 100)}%` },
+    { k: 'range', name: '射擊範圍', ic: '📏', max: 10, cost: 40, txt: l => `射程 +${l * 5}%` }
+];
+const upCost = (base, lv) => Math.round(base * (1 + lv * 0.8));      // 從 lv 升到 lv+1 要花多少
+const refundOf = (base, lv) => Math.floor(upCost(base, lv - 1) * 0.5); // 從 lv 降回 lv-1 退還 50%
+
 // 敵人六大職業（血量、傷害會隨時間成長）
 const ENEMY_TYPES = {
     melee:   { color: 0xff4455, r: 12, hp: 1.0, speed: 80, dmg: 8,  contact: 8,  gem: 1, unlock: 0,  w: 6 },
@@ -85,20 +162,37 @@ const ENEMY_TYPES = {
     control: { color: 0x44e0e0, r: 12, hp: 0.9, speed: 60, dmg: 3,  contact: 3, keep: 300, range: 380, rate: 2800, bspeed: 170, gem: 2, unlock: 75, w: 2 }
 };
 
-// ================= 存檔 =================
-const SKEY = 'void_survivors_v1';
+// ============================================================
+//  存檔（localStorage）
+// ============================================================
+const SKEY = 'void_survivors_v2';    // v2：加入金幣、養成、自動賣出設定（舊存檔不相容，所以換了 key）
 function loadSave() {
-    let d = { tickets: 3, dust: 0, pity: 0, uc: [0], uw: [0], up: [], sel: { c: 0, w: 0, p: -1 }, claimed: [], best: 0, kills: 0, star: { c: {}, w: {}, p: {} } };
+    let d = {
+        tickets: START_TICKETS, coins: START_COINS, dust: 0, pity: 0,
+        uc: [0], uw: [0], up: [],                      // 已擁有的 角色 / 武器 / 被動
+        sel: { c: 0, w: 0, p: -1 },                    // 目前裝備
+        claimed: [], best: 0, kills: 0, bossKills: 0,
+        star: { c: {}, w: {}, p: {} },                 // 升星
+        meta: {},                                      // 角色養成：{ 角色id: {atk, def, red, spd, crit, cdmg, skill} }
+        wmeta: {},                                     // 武器養成：{ 武器id: {rate, range, spec} }
+        auto: [false, false, false, false, false]      // 各稀有度「重複直接賣掉」開關
+    };
     try { let s = JSON.parse(localStorage.getItem(SKEY)); if (s) d = Object.assign(d, s); } catch (e) {}
     return d;
 }
 let S = loadSave();
 function save() { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) {} }
+// 取得（必要時建立）某角色 / 武器的養成資料
+const metaOf = (id) => S.meta[id] || (S.meta[id] = { atk: 0, def: 0, red: 0, spd: 0, crit: 0, cdmg: 0, skill: 0 });
+const wmetaOf = (id) => S.wmeta[id] || (S.wmeta[id] = { rate: 0, range: 0, spec: 0 });
+
+// 圖鑑收集里程碑獎勵（送抽獎券）
 function checkMilestones() {
     let tot = S.uc.length + S.uw.length + S.up.length, got = [];
     MILESTONES.forEach(m => { if (tot >= m.n && !S.claimed.includes(m.n)) { S.claimed.push(m.n); S.tickets += m.t; got.push(m); } });
     return got;
 }
+// 抽稀有度（含 30 抽保底；minR 用於十連保底）
 function rollRarity(minR = 0) {
     let pool = (S.pity >= 29 ? [2, 3, 4] : [0, 1, 2, 3, 4]).filter(i => i >= minR);
     let x = Math.random() * pool.reduce((a, i) => a + RAR[i].w, 0);
@@ -117,18 +211,29 @@ function scalePassive(p, st) {            // 被動升星：每星效果 +20%
     ['regen', 'heal'].forEach(f => { if (o[f]) o[f] *= k; });
     return o;
 }
-// 宇宙物件：星球與飛船不可攻擊、碰到會受傷；衛星可攻擊、血量固定、可直接穿過
+
+// ------------------------------------------------------------
+//  宇宙物件
+//  星球：緩慢漂過，碰到受傷，不可攻擊，有引力（引力強度與範圍都隨半徑 r 改變：越大越強、範圍越廣）
+//  飛船：預警後高速掠過，碰到受傷，不可攻擊
+//  衛星：固定不動、可攻擊、血量固定、可直接穿過、不受引力
+// ------------------------------------------------------------
 const PLANETS = [{ T: 130, r: 60, c: 0xc0603a }, { T: 250, r: 90, c: 0x3a7ac0, ring: true }, { T: 240, r: 120, c: 0x8a5ac0 }];
+// 依半徑計算引力：強度 ∝ (r/90)^1.5（大星球強很多），影響範圍 = 160 + 2r（從星球表面往外算）
+const planetStrength = (r) => GRAV * Math.pow(r / 90, 1.5);
+const planetReach = (r) => 160 + r * 2;
 const SAT_HP = 4;       // 衛星血量（固定，不隨時間成長）
 const SAT_EXP = 0.3;    // 衛星經驗 = 一般怪物（1）的 0.3 倍
 
-// ================= 模型 / 背景繪製 =================
-function poly(g, cx, cy, r, n, rot) {
+// ============================================================
+//  模型 / 背景繪製（全部用 Graphics 動態產生貼圖，不需要外部圖片）
+// ============================================================
+function poly(g, cx, cy, r, n, rot) {      // 正多邊形
     let pts = [];
     for (let i = 0; i < n; i++) { let a = rot + i * 2 * Math.PI / n; pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r }); }
     g.fillPoints(pts, true); g.strokePoints(pts, true);
 }
-function eyes(g, cx, cy, gap, r) {
+function eyes(g, cx, cy, gap, r) {         // 一對眼睛
     g.fillStyle(0xffffff, 1).fillCircle(cx - gap, cy, r).fillCircle(cx + gap, cy, r);
     g.fillStyle(0x111111, 1).fillCircle(cx - gap + 1, cy, r * 0.5).fillCircle(cx + gap + 1, cy, r * 0.5);
 }
@@ -164,6 +269,7 @@ const ENEMY_DRAW = {
     }
 };
 
+// 產生所有貼圖（只做一次）
 function makeTextures(scene) {
     if (scene.textures.exists('bg')) return;
     const mk = (key, size, fn) => {
@@ -189,12 +295,14 @@ function makeTextures(scene) {
             if (i % 9 === 0) g.lineStyle(1, 0xffffff, 0.6).lineBetween(x - 5, y, x + 5, y).lineBetween(x, y - 5, x, y + 5);
         }
     });
+    // 角色
     CHARACTERS.forEach((c, i) => mk('hero' + i, 52, (g, cx, cy) => {
         if (c.r >= 2) g.lineStyle(2, RAR[c.r].c, 0.9).strokeCircle(cx, cy, 25);
         g.fillStyle(c.color, 1).lineStyle(3, 0xffffff, 1); poly(g, cx, cy, 21, c.sides, c.rot);
         eyes(g, cx, cy + c.ey, 6, 4);
         if (c.angry) g.lineStyle(2, 0x111111, 1).lineBetween(cx - 11, cy - 8, cx - 2, cy - 4).lineBetween(cx + 11, cy - 8, cx + 2, cy - 4);
     }));
+    // 星球
     PLANETS.forEach((P, i) => mk('planet' + i, P.T, (g, cx, cy) => {
         g.fillStyle(P.c, 1).fillCircle(cx, cy, P.r);
         [-0.6, -0.25, 0.15, 0.5].forEach(j => { let dy = P.r * j, hw = Math.sqrt(P.r * P.r - dy * dy) - 4; g.lineStyle(7, 0x000000, 0.18).lineBetween(cx - hw, cy + dy, cx + hw, cy + dy); });
@@ -202,6 +310,7 @@ function makeTextures(scene) {
         g.lineStyle(3, 0xffffff, 0.25).strokeCircle(cx, cy, P.r);
         if (P.ring) g.lineStyle(7, 0xe8d8b0, 0.8).strokeEllipse(cx, cy, P.r * 2.6, P.r * 0.7);
     }));
+    // 飛船
     mk('ship', 64, (g, cx, cy) => {
         g.fillStyle(0xff9933, 1).fillTriangle(cx - 22, cy - 6, cx - 31, cy, cx - 22, cy + 6);
         g.fillStyle(0xcfd8e8, 1).lineStyle(2, 0x445066, 1).fillTriangle(cx + 28, cy, cx - 22, cy - 15, cx - 22, cy + 15);
@@ -209,6 +318,7 @@ function makeTextures(scene) {
         g.fillStyle(0xff4455, 1).fillRect(cx - 18, cy - 2, 14, 4);
         g.fillStyle(0x44ccff, 1).fillCircle(cx + 7, cy, 5);
     });
+    // 衛星
     mk('sat', 48, (g, cx, cy) => {
         g.fillStyle(0x3a7ac0, 1).lineStyle(1, 0xaad4ff, 1);
         g.fillRect(cx - 22, cy - 6, 13, 12).strokeRect(cx - 22, cy - 6, 13, 12).fillRect(cx + 9, cy - 6, 13, 12).strokeRect(cx + 9, cy - 6, 13, 12);
@@ -216,218 +326,495 @@ function makeTextures(scene) {
         g.lineStyle(2, 0xffffff, 1).lineBetween(cx, cy - 9, cx, cy - 18); g.fillStyle(0xff4455, 1).fillCircle(cx, cy - 19, 2.5);
         eyes(g, cx, cy, 4, 2.5);
     });
+    // 一般敵人
     Object.entries(ENEMY_TYPES).forEach(([k, T]) => mk('e_' + k, T.r * 2 + 18, (g, cx, cy) => {
         g.fillStyle(T.color, 1).lineStyle(2, 0x000000, 0.8); ENEMY_DRAW[k](g, cx, cy, T.r);
     }));
+    // 信使 NPC：背著袋子逃跑的小傢伙（npc0 = 金幣袋，npc1 = 抽獎券袋）
+    [0xffd24a, 0xff7ab8].forEach((bag, i) => mk('npc' + i, 44, (g, cx, cy) => {
+        g.fillStyle(bag, 1).lineStyle(2, 0x000000, 0.8).fillCircle(cx + 9, cy - 9, 9).strokeCircle(cx + 9, cy - 9, 9);   // 背上的袋子
+        g.fillStyle(0xe8f0ff, 1).fillCircle(cx - 2, cy + 2, 14).strokeCircle(cx - 2, cy + 2, 14);                          // 身體
+        eyes(g, cx - 2, cy, 5, 3.5);                                                                                      // 驚恐的眼睛
+        g.fillStyle(0x66ccff, 1).fillCircle(cx - 15, cy - 8, 2.5);                                                         // 冷汗
+    }));
+    // 時空裂縫：同心圓 + 旋轉紋路
+    mk('rift', 120, (g, cx, cy) => {
+        for (let i = 0; i < 8; i++) g.lineStyle(6, i % 2 ? 0x9a4cff : 0x3a1f8a, 0.95 - i * 0.07).strokeCircle(cx, cy, 56 - i * 6);
+        g.fillStyle(0x000000, 1).fillCircle(cx, cy, 12);
+        for (let j = 0; j < 4; j++) { let a = j * Math.PI / 2; g.lineStyle(3, 0xd8b0ff, 0.8).lineBetween(cx + Math.cos(a) * 14, cy + Math.sin(a) * 14, cx + Math.cos(a + 0.8) * 50, cy + Math.sin(a + 0.8) * 50); }
+    });
+    // BOSS：帶尖刺的巨大怪物
+    mk('boss', 160, (g, cx, cy) => {
+        g.fillStyle(0x5a0a2a, 1);
+        for (let i = 0; i < 12; i++) { let a = i * Math.PI / 6; g.fillTriangle(cx + Math.cos(a - 0.22) * 52, cy + Math.sin(a - 0.22) * 52, cx + Math.cos(a) * 76, cy + Math.sin(a) * 76, cx + Math.cos(a + 0.22) * 52, cy + Math.sin(a + 0.22) * 52); }
+        g.fillStyle(0xb01848, 1).lineStyle(4, 0xffffff, 0.9).fillCircle(cx, cy, 56).strokeCircle(cx, cy, 56);
+        g.fillStyle(0xffffff, 1).fillCircle(cx - 20, cy - 8, 12).fillCircle(cx + 20, cy - 8, 12);
+        g.fillStyle(0xff2222, 1).fillCircle(cx - 18, cy - 6, 6).fillCircle(cx + 18, cy - 6, 6);
+        g.lineStyle(5, 0x111111, 1).lineBetween(cx - 34, cy - 26, cx - 8, cy - 14).lineBetween(cx + 34, cy - 26, cx + 8, cy - 14);   // 怒眉
+        g.lineStyle(4, 0x111111, 1);
+        for (let i = 0; i < 5; i++) g.lineBetween(cx - 24 + i * 12, cy + 22 + (i % 2 ? 8 : 0), cx - 12 + i * 12, cy + 22 + (i % 2 ? 0 : 8));   // 鋸齒嘴
+    });
 }
 
-// ================= 共用 UI =================
+// ============================================================
+//  共用 UI（圓角面板 / 按鈕 / 標題）
+// ============================================================
+// 在已有的 Graphics 上畫一張圓角卡片（x, y 為左上角）。o: r 圓角 / fill 底色 / a 透明度 / stroke 邊框色 / bw 邊框寬 / glow 外發光
+function drawPanel(g, x, y, w, h, o = {}) {
+    const rad = o.r ?? 14, sc = o.stroke ?? 0x4a6fb5;
+    g.fillStyle(0x000000, 0.35).fillRoundedRect(x + 2, y + 5, w, h, rad);                       // 陰影
+    g.fillStyle(o.fill ?? 0x141d33, o.a ?? 0.92).fillRoundedRect(x, y, w, h, rad);              // 底色
+    g.fillStyle(0xffffff, 0.05).fillRoundedRect(x + 2, y + 2, w - 4, h * 0.45, { tl: Math.max(2, rad - 2), tr: Math.max(2, rad - 2), bl: 2, br: 2 });   // 上緣高光
+    if (o.glow) g.lineStyle(6, sc, 0.2).strokeRoundedRect(x - 2, y - 2, w + 4, h + 4, rad + 2);  // 外發光
+    g.lineStyle(o.bw ?? 2, sc, 1).strokeRoundedRect(x, y, w, h, rad);
+    return g;
+}
+// 以中心點建立一張獨立的面板（o.d 深度、o.fixed 是否固定在螢幕上不隨鏡頭移動）
+function panel(s, cx, cy, w, h, o = {}) {
+    const g = s.add.graphics(); drawPanel(g, cx - w / 2, cy - h / 2, w, h, o);
+    g.setDepth(o.d ?? 0); if (o.fixed) g.setScrollFactor(0);
+    return g;
+}
+// 文字 + 自動撐開的底板，回傳 { t: 文字物件, g: 底板 }
+function infoPill(s, cx, cy, str, style, o = {}) {
+    const d = o.d ?? 0;
+    const t = s.add.text(cx, cy, str, style).setOrigin(0.5).setDepth(d + 2);
+    const pw = o.w ?? W - 20, ph = Math.max(o.minH ?? 0, t.height + 14);
+    const g = panel(s, cx, cy, pw, ph, Object.assign({ r: 10, fill: 0x0e1526, bw: 1, stroke: 0x2a3a5e }, o, { d: d + 1 }));
+    return { t, g };
+}
+// 立體圓角按鈕（含懸停、按下效果）
+// bg 可為 '#rrggbb' 或數字；o: { w 最小寬, d 深度, fixed 固定螢幕, delay 延遲幾毫秒才可點 }
+// 回傳 { zone, destroy() }
+function btn(s, x, y, label, fn, bg = '#2a7de1', size = 20, o = {}) {
+    const col = typeof bg === 'string' ? parseInt(bg.slice(1), 16) : bg, d = o.d ?? 1;
+    const t = s.add.text(x, y, label, { fontSize: size + 'px', color: '#fff', fontStyle: 'bold', align: 'center', lineSpacing: 2, stroke: '#000', strokeThickness: 3,
+        shadow: { offsetX: 0, offsetY: 2, color: '#000', blur: 4, fill: true } }).setOrigin(0.5).setDepth(d + 2);
+    const w = Math.max(o.w || 0, t.width + size * 1.8), h = t.height + size * 0.8, r = Math.min(16, h / 2.2);
+    const g = s.add.graphics().setDepth(d + 1);
+    const z = s.add.zone(x, y, w, h).setDepth(d + 3).setInteractive({ useHandCursor: true });   // 透明的點擊區
+    if (o.fixed) [t, g, z].forEach(i => i.setScrollFactor(0));
+    const lighten = (c) => Phaser.Display.Color.ValueToColor(c).lighten(22).color;
+    const darken = (c) => Phaser.Display.Color.ValueToColor(c).darken(35).color;
+    const paint = (hover, press) => {                  // 依狀態重畫按鈕外觀
+        const c = hover ? lighten(col) : col, yo = press ? 3 : 0;
+        g.clear();
+        g.fillStyle(0x000000, 0.4).fillRoundedRect(x - w / 2, y - h / 2 + 5, w, h, r);
+        g.fillStyle(darken(c), 1).fillRoundedRect(x - w / 2, y - h / 2 + yo, w, h, r);
+        g.fillStyle(c, 1).fillRoundedRect(x - w / 2, y - h / 2 + yo, w, h - 4, r);
+        g.fillStyle(0xffffff, 0.2).fillRoundedRect(x - w / 2 + 3, y - h / 2 + 3 + yo, w - 6, h * 0.38, Math.max(2, r - 3));
+        g.lineStyle(2, 0xffffff, hover ? 0.85 : 0.4).strokeRoundedRect(x - w / 2, y - h / 2 + yo, w, h - 4, r);
+        t.setY(y + yo);
+    };
+    paint(false, false);
+    z.on('pointerover', () => paint(true, false)).on('pointerout', () => paint(false, false))
+     .on('pointerdown', () => { paint(true, true); fn(); }).on('pointerup', () => { if (z.scene) paint(true, false); });
+    if (o.delay) { z.disableInteractive(); s.time.delayedCall(o.delay, () => { if (z.scene) z.setInteractive({ useHandCursor: true }); }); }   // 避免結算畫面誤觸
+    return { zone: z, destroy() { [t, g, z].forEach(i => i.destroy()); } };
+}
+// 選單用的星空背景
 function menuBg(s) {
-    const w = s.cameras.main.width, h = s.cameras.main.height;
     s.cameras.main.setBackgroundColor('#090d1c');
-    s.add.tileSprite(0, 0, w, h, 'bg').setOrigin(0); s.add.tileSprite(0, 0, w, h, 'stars').setOrigin(0);
+    s.add.tileSprite(0, 0, W, H, 'bg').setOrigin(0); s.add.tileSprite(0, 0, W, H, 'stars').setOrigin(0);
 }
-function btn(s, x, y, label, fn, bg = '#2a7de1', size = 20) {
-    return s.add.text(x, y, label, { fontSize: size + 'px', color: '#fff', backgroundColor: bg, padding: { x: 18, y: 8 } })
-        .setOrigin(0.5).setInteractive({ useHandCursor: true }).on('pointerdown', fn);
+// 畫面標題（金色字 + 下方裝飾線）
+function title(s, t) {
+    s.add.text(W / 2, 36, t, { fontSize: '28px', color: '#ffd700', fontStyle: 'bold', stroke: '#5a3b00', strokeThickness: 5,
+        shadow: { offsetX: 0, offsetY: 3, color: '#000', blur: 8, fill: true } }).setOrigin(0.5);
+    const g = s.add.graphics();
+    g.lineStyle(2, 0xffd700, 0.5).lineBetween(W / 2 - 90, 64, W / 2 - 8, 64).lineBetween(W / 2 + 8, 64, W / 2 + 90, 64);
+    g.fillStyle(0xffd700, 1).fillCircle(W / 2, 64, 3);
 }
-function title(s, t) { s.add.text(s.cameras.main.width / 2, 36, t, { fontSize: '28px', color: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5); }
 const fmtT = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec) % 60).padStart(2, '0')}`;
 
-// ================= 主頁 =================
+// ============================================================
+//  主頁
+// ============================================================
 class MenuScene extends Phaser.Scene {
     constructor() { super('MenuScene'); }
     create() {
         makeTextures(this); menuBg(this);
-        const w = this.cameras.main.width, h = this.cameras.main.height;
-        this.add.text(w / 2, h * 0.2, '虛空倖存者', { fontSize: Math.min(48, w / 7) + 'px', color: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
-        this.add.text(w / 2, h * 0.2 + 46, `🎟 ${S.tickets}　最佳存活 ${fmtT(S.best)}　累積擊殺 ${S.kills}`, { fontSize: '15px', color: '#aac4ff' }).setOrigin(0.5);
-        btn(this, w / 2, h * 0.44, '▶ 出發', () => this.scene.start('LoadoutScene'), '#2a7de1', 26);
-        btn(this, w / 2, h * 0.44 + 75, '🎰 抽獎', () => this.scene.start('GachaScene'), '#b0508a', 26);
-        btn(this, w / 2, h * 0.44 + 150, '📖 圖鑑', () => this.scene.start('CodexScene'), '#3a8a6a', 26);
+        // 裝飾用的星球，緩慢漂浮
+        [[0.9, 0.2, 1, 0.55], [0.08, 0.86, 2, 0.4]].forEach(([px, py, i, a]) => {
+            let pl = this.add.image(W * px, H * py, 'planet' + i).setAlpha(a).setScale(0.9);
+            this.tweens.add({ targets: pl, y: pl.y + 14, angle: 8, duration: 4200, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
+        });
+        this.add.text(W / 2, 100, '虛空倖存者', { fontSize: '60px', color: '#ffd700', fontStyle: 'bold', stroke: '#5a3b00', strokeThickness: 8,
+            shadow: { offsetX: 0, offsetY: 5, color: '#ff9a00', blur: 22, fill: true } }).setOrigin(0.5);
+        this.add.text(W / 2, 148, 'V O I D　S U R V I V O R S', { fontSize: '13px', color: '#7fa8ff' }).setOrigin(0.5);
+        infoPill(this, W / 2, 200, `🪙 ${S.coins}　🎟 ${S.tickets}　⏱ 最佳 ${fmtT(S.best)}　💀 擊殺 ${S.kills}　👹 BOSS ${S.bossKills}`,
+            { fontSize: '16px', color: '#cfe0ff', fontStyle: 'bold' }, { w: 640 });
+        // 四個主要入口排成一排
+        const items = [['▶  出發', 'LoadoutScene', '#2a7de1'], ['🎰  抽獎', 'GachaScene', '#b0508a'], ['🔧  養成', 'UpgradeScene', '#d08a2a'], ['📖  圖鑑', 'CodexScene', '#3a8a6a']];
+        items.forEach(([lb, sc, col], i) => btn(this, W / 2 + (i - 1.5) * 215, 310, lb, () => this.scene.start(sc), col, 26, { w: 190 }));
+        infoPill(this, W / 2, 450, '移動：WASD／方向鍵／螢幕拖曳　　按住【空白鍵】：滑鼠手動瞄準連射\n金幣可在【養成】強化角色與武器　　每 30 秒有機會出現時空裂縫（BOSS）　　留意背著袋子逃跑的信使！',
+            { fontSize: '13px', color: '#9bb4ee', align: 'center', lineSpacing: 5 }, { w: 860 });
     }
 }
 
-// ================= 出發準備（選角色 / 武器 / 被動）=================
+// ============================================================
+//  出發準備（選角色 / 武器 / 被動），橫向三張卡片
+// ============================================================
 class LoadoutScene extends Phaser.Scene {
     constructor() { super('LoadoutScene'); }
-    opts(cat) { return (cat.key === 'p' ? [-1] : []).concat(S[cat.u]); }
+    opts(cat) { return (cat.key === 'p' ? [-1] : []).concat(S[cat.u]); }   // 被動多一個「不裝備」
     create() {
         makeTextures(this); menuBg(this); title(this, '出發準備');
-        const w = this.cameras.main.width;
-        this.rows = CATS.map((cat, i) => {
-            let y = 140 + i * 150;
-            this.add.text(16, y - 62, cat.label, { fontSize: '13px', color: '#7f93b8' });
-            let img = cat.key === 'c' ? this.add.image(w / 2, y - 28, 'hero0') : null;
-            let nameT = this.add.text(w / 2, y + (img ? 12 : -16), '', { fontSize: '19px', fontStyle: 'bold' }).setOrigin(0.5);
-            let descT = this.add.text(w / 2, y + (img ? 52 : 28), '', { fontSize: '13px', color: '#c8d4ee', align: 'center', wordWrap: { width: w - 110 } }).setOrigin(0.5);
-            this.add.text(26, y + 10, '◀', { fontSize: '30px', color: '#fff' }).setOrigin(0.5).setInteractive().on('pointerdown', () => this.cycle(cat, -1));
-            this.add.text(w - 26, y + 10, '▶', { fontSize: '30px', color: '#fff' }).setOrigin(0.5).setInteractive().on('pointerdown', () => this.cycle(cat, 1));
-            return { cat, img, nameT, descT };
+        this.cols = CATS.map((cat, i) => {
+            const cx = 170 + i * 310;
+            const cardG = this.add.graphics().setDepth(1);
+            panel(this, cx, 104, 80, 22, { r: 8, fill: 0x24365e, bw: 1, stroke: 0x4a6fb5, d: 2 });
+            this.add.text(cx, 104, cat.label, { fontSize: '12px', color: '#bcd0ff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(3);
+            const img = this.add.image(cx, 168, 'hero0').setScale(1.6).setDepth(3).setVisible(cat.key === 'c');
+            const icT = this.add.text(cx, 168, '', { fontSize: '50px' }).setOrigin(0.5).setDepth(3);
+            const nameT = this.add.text(cx, 226, '', { fontSize: '19px', fontStyle: 'bold', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setDepth(3);
+            const descT = this.add.text(cx, 272, '', { fontSize: '13px', color: '#d6e0f5', align: 'center', lineSpacing: 3, wordWrap: { width: 250 } }).setOrigin(0.5).setDepth(3);
+            const infoT = this.add.text(cx, 334, '', { fontSize: '12px', color: '#9fe3ff', align: 'center', lineSpacing: 3, wordWrap: { width: 250 } }).setOrigin(0.5).setDepth(3);
+            btn(this, cx - 100, 392, '◀', () => this.cycle(cat, -1), '#3a4a7a', 20, { w: 50 });
+            btn(this, cx + 100, 392, '▶', () => this.cycle(cat, 1), '#3a4a7a', 20, { w: 50 });
+            return { cat, cx, img, icT, nameT, descT, infoT, cardG };
         });
-        btn(this, w / 2, 140 + 3 * 150 - 20, '開始戰鬥', () => this.scene.start('GameScene', { c: S.sel.c, w: S.sel.w, p: S.sel.p }), '#2a7de1', 24);
-        btn(this, 56, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444', 14);
+        btn(this, W / 2, 480, '⚔  開始戰鬥', () => this.scene.start('GameScene', { c: S.sel.c, w: S.sel.w, p: S.sel.p }), '#2a7de1', 24, { w: 290 });
+        btn(this, 60, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444a5a', 14);
         this.refresh();
     }
-    cycle(cat, d) {
+    cycle(cat, d) {   // 切換該分類的選擇
         let o = this.opts(cat), i = o.indexOf(S.sel[cat.key]);
         S.sel[cat.key] = o[(i + d + o.length) % o.length]; save(); this.refresh();
     }
     refresh() {
-        this.rows.forEach(({ cat, img, nameT, descT }) => {
+        this.cols.forEach(({ cat, cx, img, icT, nameT, descT, infoT, cardG }) => {
             let id = S.sel[cat.key], it = id >= 0 ? cat.list[id] : null;
-            nameT.setText(it ? `${it.ic || ''} ${it.name} ${starStr(cat.key, id)}　${RAR[it.r].n}` : '（不裝備）').setColor(it ? hex(RAR[it.r].c) : '#888');
-            let d = it ? it.desc : '';
-            if (cat.key === 'w') d += `\n專武：${CHARACTERS[it.excl].name}　` + (it.excl === S.sel.c ? '✦ 已啟動（傷害+25%、數量+1）' : '（裝備該角色時傷害+25%、數量+1）');
-            descT.setText(d);
-            if (img) img.setTexture('hero' + id);
+            cardG.clear(); drawPanel(cardG, cx - 145, 80, 290, 340, { stroke: it ? RAR[it.r].c : 0x3b5a96, glow: !!it, fill: 0x121b31 });
+            nameT.setText(it ? `${it.ic || ''} ${it.name} ${starStr(cat.key, id)}\n${RAR[it.r].n}` : '（不裝備）').setColor(it ? hex(RAR[it.r].c) : '#888');
+            descT.setText(it ? it.desc : '');
+            if (cat.key === 'c') img.setTexture('hero' + id); else icT.setText(it ? it.ic : '🚫');
+            let info = '';
+            if (cat.key === 'c') {          // 顯示技能與目前養成等級
+                const m = metaOf(id);
+                info = `✨ 技能：${it.sk.name}　Lv${m.skill}\n${it.sk.txt(m.skill)}`;
+            } else if (cat.key === 'w') {   // 顯示專武與武器養成
+                const wm = wmetaOf(id);
+                info = `專武：${CHARACTERS[it.excl].name}　` + (it.excl === S.sel.c ? '✦ 已啟動（傷害+25%、數量+1）' : '（裝備該角色時傷害+25%、數量+1）')
+                     + `\n養成：射速 Lv${wm.rate}　範圍 Lv${wm.range}　${it.spec.name} Lv${wm.spec}`;
+            }
+            infoT.setText(info);
         });
     }
 }
 
-// ================= 抽獎 =================
+// ============================================================
+//  養成（局外成長）：每個角色、每把武器獨立升級；可降級並退還 50% 金幣
+// ============================================================
+class UpgradeScene extends Phaser.Scene {
+    constructor() { super('UpgradeScene'); }
+    create() {
+        makeTextures(this); menuBg(this); title(this, '🔧 養成');
+        this.tab = 0; this.idx = Math.max(0, S.uc.indexOf(S.sel.c)); this.dyn = [];
+        btn(this, 60, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444a5a', 14);
+        this.coinT = infoPill(this, 850, 36, ' ', { fontSize: '16px', color: '#ffd700', fontStyle: 'bold' }, { w: 190, minH: 30, stroke: 0x8a6a1a }).t;
+        this.toast = this.add.text(700, 82, '', { fontSize: '13px', color: '#ffd700', fontStyle: 'bold', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5).setDepth(5);
+        this.refresh();
+    }
+    say(msg, ok) { this.toast.setText(msg).setColor(ok ? '#7fe3a0' : '#ff8a8a'); }
+    // 目前頁籤要顯示哪些養成列：{ name, ic, lv, max, cost, txt, set }
+    rowsFor(cat, id) {
+        const it = cat.list[id];
+        if (cat.key === 'c') {
+            const m = metaOf(id);
+            return CSTATS.map(st => ({ name: st.name, ic: st.ic, lv: m[st.k], max: st.max, cost: st.cost, txt: st.txt(m[st.k]), set: v => { m[st.k] = v; } }))
+                .concat([{ name: '技能：' + it.sk.name, ic: '✨', lv: m.skill, max: SKILL_MAX, cost: SKILL_COST, txt: it.sk.txt(m.skill), set: v => { m.skill = v; } }]);
+        }
+        const wm = wmetaOf(id);
+        return WSTATS.map(st => ({ name: st.name, ic: st.ic, lv: wm[st.k], max: st.max, cost: st.cost, txt: st.txt(wm[st.k]), set: v => { wm[st.k] = v; } }))
+            .concat([{ name: '專屬：' + it.spec.name, ic: it.ic, lv: wm.spec, max: it.spec.max, cost: it.spec.cost, txt: it.spec.txt(wm.spec), set: v => { wm.spec = v; } }]);
+    }
+    buy(row) {            // 升級：扣金幣
+        if (row.lv >= row.max) return;
+        const c = upCost(row.cost, row.lv);
+        if (S.coins < c) { this.say('金幣不足！', false); return; }
+        S.coins -= c; row.set(row.lv + 1); save(); this.say(`${row.name} 升到 Lv${row.lv + 1}`, true); this.refresh();
+    }
+    undo(row) {           // 降級（取消升級）：只退還該級花費的 50%
+        if (row.lv <= 0) return;
+        const r = refundOf(row.cost, row.lv);
+        S.coins += r; row.set(row.lv - 1); save(); this.say(`${row.name} 降回 Lv${row.lv - 1}，退還 🪙${r}（50%）`, true); this.refresh();
+    }
+    refresh() {
+        this.dyn.forEach(o => o.destroy()); this.dyn = [];
+        this.coinT.setText(`🪙 ${S.coins}`);
+        // 頁籤：角色 / 武器
+        ['角色', '武器'].forEach((n, i) => this.dyn.push(btn(this, 400 + i * 125, 82, n, () => {
+            this.tab = i; this.idx = Math.max(0, (i ? S.uw : S.uc).indexOf(i ? S.sel.w : S.sel.c)); this.toast.setText(''); this.refresh();
+        }, i === this.tab ? '#2a7de1' : '#2a3558', 15, { w: 105 })));
+        const cat = CATS[this.tab], owned = S[cat.u], id = owned[this.idx], it = cat.list[id], rc = RAR[it.r].c;
+        // 左側：目前選擇的項目
+        this.dyn.push(panel(this, 155, 315, 270, 410, { stroke: rc, glow: true, fill: 0x121b31, d: 1 }));
+        if (cat.key === 'c') this.dyn.push(this.add.image(155, 185, 'hero' + id).setScale(2.2).setDepth(3));
+        else this.dyn.push(this.add.text(155, 185, it.ic, { fontSize: '66px' }).setOrigin(0.5).setDepth(3));
+        this.dyn.push(
+            this.add.text(155, 260, it.name, { fontSize: '22px', color: hex(rc), fontStyle: 'bold', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setDepth(3),
+            this.add.text(155, 288, `${RAR[it.r].n}　${starStr(cat.key, id) || '（未升星）'}`, { fontSize: '13px', color: '#ffd24a' }).setOrigin(0.5).setDepth(3),
+            this.add.text(155, 345, it.desc, { fontSize: '13px', color: '#d6e0f5', align: 'center', lineSpacing: 3, wordWrap: { width: 230 } }).setOrigin(0.5).setDepth(3),
+            this.add.text(155, 455, `${this.idx + 1} / ${owned.length}`, { fontSize: '14px', color: '#9bb4ee' }).setOrigin(0.5).setDepth(3));
+        const step = (d) => { this.idx = (this.idx + d + owned.length) % owned.length; this.toast.setText(''); this.refresh(); };
+        this.dyn.push(btn(this, 60, 490, '◀', () => step(-1), '#3a4a7a', 20, { w: 52 }), btn(this, 250, 490, '▶', () => step(1), '#3a4a7a', 20, { w: 52 }));
+        // 右側：養成列表
+        this.rowsFor(cat, id).forEach((row, i) => {
+            const y = 138 + i * 54;
+            this.dyn.push(panel(this, 625, y, 630, 48, { r: 10, fill: 0x141d33, bw: 1, stroke: row.lv >= row.max ? 0xffd24a : 0x3b5a96, d: 1 }));
+            this.dyn.push(
+                this.add.text(324, y - 9, `${row.ic} ${row.name}`, { fontSize: '15px', color: '#fff', fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(3),
+                this.add.text(324, y + 11, row.txt, { fontSize: '12px', color: '#9fe3ff' }).setOrigin(0, 0.5).setDepth(3),
+                this.add.text(655, y - 9, `Lv ${row.lv}/${row.max}`, { fontSize: '14px', color: row.lv >= row.max ? '#ffd24a' : '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(3));
+            const bar = this.add.graphics().setDepth(3);       // 等級進度條
+            bar.fillStyle(0x000000, 0.6).fillRoundedRect(605, y + 6, 100, 7, 3);
+            bar.fillStyle(row.lv >= row.max ? 0xffd24a : 0x00ff88, 1).fillRoundedRect(605, y + 6, 100 * row.lv / row.max, 7, 3);
+            this.dyn.push(bar);
+            // 降級（退 50%）與升級按鈕
+            const rf = row.lv > 0 ? refundOf(row.cost, row.lv) : 0;
+            this.dyn.push(btn(this, 772, y, row.lv > 0 ? `↩ 🪙${rf}` : '↩', () => this.undo(row), row.lv > 0 ? '#8a4a2a' : '#333844', 13, { w: 84 }));
+            if (row.lv >= row.max) this.dyn.push(btn(this, 872, y, 'MAX', () => {}, '#8a6a1a', 14, { w: 100 }));
+            else { const c = upCost(row.cost, row.lv); this.dyn.push(btn(this, 872, y, `升級 🪙${c}`, () => this.buy(row), S.coins >= c ? '#2a9d5c' : '#5a3a3a', 14, { w: 100 })); }
+        });
+        this.dyn.push(this.add.text(625, 138 + (cat.key === 'c' ? 7 : 3) * 54 - 20, '提示：降級只會退還該級花費的 50%，請謹慎升級', { fontSize: '12px', color: '#7f93b8' }).setOrigin(0.5).setDepth(3));
+    }
+}
+
+// ============================================================
+//  抽獎
+// ============================================================
 class GachaScene extends Phaser.Scene {
     constructor() { super('GachaScene'); }
     create() {
         makeTextures(this); menuBg(this); title(this, '🎰 抽獎');
-        const w = this.cameras.main.width, h = this.cameras.main.height;
-        this.dyn = [];
-        this.info = this.add.text(w / 2, 82, '', { fontSize: '15px', color: '#aac4ff', align: 'center' }).setOrigin(0.5);
-        this.add.text(w / 2, 120, '機率：常見60% 稀有27% 史詩9% 傳說3.4% 秘密0.6%　30 抽保底史詩以上\n十連保底至少 1 個稀有以上\n重複獲得 → 升星（最高 ★5，每星強化該項目）；滿星後變星塵，10 顆換 1 張券', { fontSize: '11px', color: '#7f93b8', align: 'center' }).setOrigin(0.5);
-        this.resImg = this.add.image(w / 2, h * 0.4, 'hero0').setVisible(false).setScale(2);
-        this.resIc = this.add.text(w / 2, h * 0.4, '', { fontSize: '64px' }).setOrigin(0.5);
-        this.resName = this.add.text(w / 2, h * 0.4 + 62, '', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5);
-        this.resDesc = this.add.text(w / 2, h * 0.4 + 100, '', { fontSize: '13px', color: '#c8d4ee', align: 'center', wordWrap: { width: w - 60 } }).setOrigin(0.5);
-        this.toastT = this.add.text(w / 2, h * 0.4 + 150, '', { fontSize: '14px', color: '#ffd700', align: 'center', wordWrap: { width: w - 40 } }).setOrigin(0.5);
+        this.dyn = []; this.autoBtns = []; this.busy = false;
+        btn(this, 60, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444a5a', 14);
+        this.info = infoPill(this, W / 2, 84, ' ', { fontSize: '14px', color: '#cfe0ff', fontStyle: 'bold' }, { w: 760, minH: 30, stroke: 0x3b5a96 }).t;
+        // 各稀有度「重複直接賣掉」開關
+        this.add.text(70, 124, '重複自動賣出：', { fontSize: '13px', color: '#9bb4ee', fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(3);
+        this.drawAuto();
+        // 結果展示區（左）
+        this.card = this.add.graphics().setDepth(1);
+        this.resImg = this.add.image(300, 245, 'hero0').setVisible(false).setScale(2).setDepth(3);
+        this.resIc = this.add.text(300, 245, '', { fontSize: '64px' }).setOrigin(0.5).setDepth(3);
+        this.resName = this.add.text(300, 310, '', { fontSize: '24px', fontStyle: 'bold', stroke: '#000', strokeThickness: 5 }).setOrigin(0.5).setDepth(3);
+        this.resDesc = this.add.text(300, 348, '', { fontSize: '13px', color: '#d6e0f5', align: 'center', lineSpacing: 3, wordWrap: { width: 420 } }).setOrigin(0.5).setDepth(3);
+        this.toastT = this.add.text(300, 395, '', { fontSize: '14px', color: '#ffd700', align: 'center', fontStyle: 'bold', stroke: '#000', strokeThickness: 3, wordWrap: { width: 440 } }).setOrigin(0.5).setDepth(3);
+        // 抽獎按鈕（右）：每個分類一列，左單抽右十連
         CATS.forEach((cat, i) => {
-            btn(this, w * (0.2 + i * 0.3), h - 130, `抽${cat.label}\n🎟×1`, () => this.pull(cat, 1), '#b0508a', 15);
-            btn(this, w * (0.2 + i * 0.3), h - 62, `十連${cat.label}\n🎟×10`, () => this.pull(cat, 10), '#7a3a9a', 15);
+            btn(this, 650, 200 + i * 90, `抽${cat.label}\n🎟×1`, () => this.pull(cat, 1), '#b0508a', 16, { w: 150 });
+            btn(this, 830, 200 + i * 90, `十連${cat.label}\n🎟×10`, () => this.pull(cat, 10), '#7a3a9a', 16, { w: 150 });
         });
-        btn(this, 56, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444', 14);
+        infoPill(this, W / 2, 497, '機率：常見60% 稀有27% 史詩9% 傳說3.4% 秘密0.6%　30 抽保底史詩以上　十連保底至少 1 個稀有以上\n重複的角色會詢問「升星」或「賣掉換金幣」（最高 ★5）；武器／被動重複自動升星；開啟上方「自動賣出」的稀有度則直接換金幣',
+            { fontSize: '11px', color: '#8da2cc', align: 'center', lineSpacing: 3, wordWrap: { width: 880 } }, { w: 920 });
         this.refreshInfo();
     }
-    refreshInfo() { this.info.setText(`🎟 ${S.tickets}　星塵 ${S.dust}/10　保底 ${S.pity}/30　收藏 ${S.uc.length + S.uw.length + S.up.length}/${TOTAL}`); }
+    drawAuto() {          // 畫 5 顆稀有度開關
+        this.autoBtns.forEach(b => b.destroy()); this.autoBtns = [];
+        RAR.forEach((r, i) => {
+            const on = S.auto[i];
+            this.autoBtns.push(btn(this, 250 + i * 125, 124, `${r.n} ${on ? '✔賣出' : '詢問'}`, () => { S.auto[i] = !S.auto[i]; save(); this.drawAuto(); },
+                on ? r.c : '#2a3558', 12, { w: 112 }));
+        });
+    }
+    refreshInfo() { this.info.setText(`🪙 ${S.coins}　🎟 ${S.tickets}　星塵 ${S.dust}/10　保底 ${S.pity}/30　收藏 ${S.uc.length + S.uw.length + S.up.length}/${TOTAL}`); }
 
-    doPull(cat, minR) {
+    // 抽一次：只決定「抽到哪個項目」，是否重複與如何處理留到 resolve() 依序判斷
+    roll(cat, minR) {
         let r = rollRarity(minR); S.pity = r >= 2 ? 0 : S.pity + 1;
         let pool = []; while (!pool.length) { pool = cat.list.filter(it => it.r === r); if (!pool.length) r--; }
-        let it = Phaser.Utils.Array.GetRandom(pool), tag = '';
-        if (!S[cat.u].includes(it.id)) { S[cat.u].push(it.id); tag = '✨NEW'; }
-        else {
-            let st = starOf(cat.key, it.id);
-            if (st < MAXSTAR) { S.star[cat.key][it.id] = st + 1; tag = `升星 ★${st + 1}`; }
-            else { S.dust += it.r + 1; tag = `滿星 星塵+${it.r + 1}`; while (S.dust >= 10) { S.dust -= 10; S.tickets++; tag += '（券+1）'; } }
-        }
-        return { it, tag };
+        return Phaser.Utils.Array.GetRandom(pool);
     }
-
     pull(cat, n) {
-        const w = this.cameras.main.width, h = this.cameras.main.height;
-        if (S.tickets < n) { this.toastT.setText(`抽獎券不足（需要 ${n} 張）！存活每 2 分鐘可獲得 1 張，圖鑑收集也會送券`).setY(h * 0.4 + 150); return; }
-        S.tickets -= n;
-        let res = [];
-        for (let i = 0; i < n; i++) res.push(this.doPull(cat, (n === 10 && i === 9 && !res.some(x => x.it.r >= 1)) ? 1 : 0));   // 十連保底稀有以上
-        let ms = checkMilestones(); save(); this.refreshInfo();
-        this.dyn.forEach(o => o.destroy()); this.dyn = [];
-        let ext = ms.map(m => `\n🎉 圖鑑收集 ${m.n} 件！獲得 🎟×${m.t}`).join('');
-
-        if (n === 1) {
-            const { it, tag } = res[0];
+        if (this.busy) return;
+        if (S.tickets < n) { this.card.clear(); this.toastT.setColor('#ff8a8a').setText(`抽獎券不足（需要 ${n} 張）！\n存活每 2 分鐘可獲得 1 張，圖鑑收集也會送券`); return; }
+        S.tickets -= n; this.busy = true;
+        let rolls = [];
+        for (let i = 0; i < n; i++) rolls.push(this.roll(cat, (n === 10 && i === 9 && !rolls.some(x => x.r >= 1)) ? 1 : 0));   // 十連保底稀有以上
+        this.resolve(cat, rolls, 0, [], { mode: null });
+    }
+    // 依序處理每一抽：新獲得 / 自動賣出 / 滿星 / 詢問升星或賣掉
+    resolve(cat, rolls, i, out, batch) {
+        if (i >= rolls.length) return this.finish(cat, out);
+        const it = rolls[i], k = cat.key;
+        const next = (tag) => { out.push({ it, tag }); this.resolve(cat, rolls, i + 1, out, batch); };
+        if (!S[cat.u].includes(it.id)) { S[cat.u].push(it.id); return next('✨NEW'); }
+        if (S.auto[it.r]) { S.coins += SELL_PRICE[it.r]; return next(`賣出 🪙+${SELL_PRICE[it.r]}`); }      // 該稀有度設為自動賣出
+        const st = starOf(k, it.id);
+        if (st >= MAXSTAR) {                                                                                  // 已滿星 → 星塵
+            S.dust += it.r + 1; let tag = `滿星 星塵+${it.r + 1}`;
+            while (S.dust >= 10) { S.dust -= 10; S.tickets++; tag += '（券+1）'; }
+            return next(tag);
+        }
+        const apply = (mode) => {
+            if (mode === 'sell') { S.coins += SELL_PRICE[it.r]; next(`賣出 🪙+${SELL_PRICE[it.r]}`); }
+            else { S.star[k][it.id] = st + 1; next(`升星 ★${st + 1}`); }
+        };
+        if (k !== 'c') return apply('star');            // 武器 / 被動：重複直接升星
+        if (batch.mode) return apply(batch.mode);       // 十連中已選「全部…」
+        this.askDup(it, st, rolls.length - i - 1, (mode, all) => { if (all) batch.mode = mode; apply(mode); });
+    }
+    // 重複角色的詢問視窗：升星 or 轉成金幣（十連時還可「全部…」）
+    askDup(it, st, remain, cb) {
+        const ui = [], cx = W / 2, cy = H / 2, rc = RAR[it.r].c, price = SELL_PRICE[it.r];
+        ui.push(this.add.rectangle(cx, cy, W, H, 0x000000, 0.72).setDepth(500).setInteractive());   // 擋住底下的按鈕
+        ui.push(panel(this, cx, cy, 580, 270, { stroke: rc, glow: true, fill: 0x141d33, a: 0.98, d: 501, r: 18 }));
+        ui.push(this.add.text(cx, cy - 105, '已擁有此角色', { fontSize: '20px', color: '#ffd700', fontStyle: 'bold', stroke: '#5a3b00', strokeThickness: 4 }).setOrigin(0.5).setDepth(503));
+        ui.push(this.add.image(cx - 190, cy - 30, 'hero' + it.id).setScale(2).setDepth(503));
+        ui.push(this.add.text(cx - 100, cy - 30, `【${it.name}】${RAR[it.r].n}　目前 ${'★'.repeat(st) || '無星'}\n\n⭐ 升星 → ★${st + 1}（${STAR_TXT.c}）\n🪙 或轉成金幣 +${price}`,
+            { fontSize: '15px', color: '#e6eeff', lineSpacing: 5 }).setOrigin(0, 0.5).setDepth(503));
+        const done = (mode, all) => { ui.forEach(o => o.destroy()); cb(mode, all); };
+        const o = { d: 510 };
+        ui.push(btn(this, cx - 90, cy + 55, '⭐ 升星', () => done('star', false), '#d08a2a', 18, Object.assign({ w: 150 }, o)));
+        ui.push(btn(this, cx + 90, cy + 55, `🪙 賣掉 +${price}`, () => done('sell', false), '#2a9d5c', 18, Object.assign({ w: 150 }, o)));
+        if (remain > 0) {        // 十連：後面還有抽，提供「全部…」
+            ui.push(btn(this, cx - 90, cy + 108, `之後全部升星`, () => done('star', true), '#7a5a2a', 13, Object.assign({ w: 150 }, o)));
+            ui.push(btn(this, cx + 90, cy + 108, `之後全部賣掉`, () => done('sell', true), '#1f6a40', 13, Object.assign({ w: 150 }, o)));
+        }
+    }
+    finish(cat, out) {       // 全部處理完：算里程碑、存檔、顯示結果
+        const ms = checkMilestones(); save(); this.refreshInfo(); this.busy = false;
+        this.dyn.forEach(o => o.destroy()); this.dyn = []; this.card.clear();
+        this.toastT.setColor('#ffd700');
+        const ext = ms.map(m => `\n🎉 圖鑑收集 ${m.n} 件！獲得 🎟×${m.t}`).join('');
+        if (out.length === 1) {
+            const { it, tag } = out[0], rc = RAR[it.r].c;
+            drawPanel(this.card, 300 - 230, 175, 460, 250, { stroke: rc, glow: true, fill: 0x141d33 });
             this.resImg.setVisible(cat.key === 'c'); if (cat.key === 'c') this.resImg.setTexture('hero' + it.id);
             this.resIc.setText(cat.key === 'c' ? '' : it.ic);
-            this.resName.setText(`${it.name}　${RAR[it.r].n}`).setColor(hex(RAR[it.r].c));
+            this.resName.setText(`${it.name}　${RAR[it.r].n}`).setColor(hex(rc));
             this.resDesc.setText(it.desc);
-            this.toastT.setText(tag + ext).setY(h * 0.4 + 150);
+            this.toastT.setText(tag + ext).setY(395);
             this.tweens.add({ targets: this.resImg, scale: { from: 1, to: 2 }, duration: 250, ease: 'Back.Out' });
             this.tweens.add({ targets: [this.resIc, this.resName], scale: { from: 0.5, to: 1 }, duration: 250, ease: 'Back.Out' });
         } else {
             this.resImg.setVisible(false); this.resIc.setText(''); this.resName.setText(''); this.resDesc.setText('');
-            res.forEach(({ it, tag }, i) => {
-                let t = this.add.text(w / 2, 175 + i * 26, `${cat.key === 'c' ? '👤' : it.ic} ${it.name}　${RAR[it.r].n}　${tag}`, { fontSize: '14px', color: hex(RAR[it.r].c) }).setOrigin(0.5);
-                this.dyn.push(t);
-                this.tweens.add({ targets: t, alpha: { from: 0, to: 1 }, delay: i * 70, duration: 150 });
+            const cw = 218, rowH = 44;          // 十連：2 欄 × 5 列的小卡片
+            out.forEach(({ it, tag }, i) => {
+                const rc = RAR[it.r].c, x = 300 + (i % 2 ? 1 : -1) * (cw / 2 + 4), y = 168 + Math.floor(i / 2) * (rowH + 6) + rowH / 2;
+                const g = this.add.graphics().setDepth(4);
+                drawPanel(g, x - cw / 2, y - rowH / 2, cw, rowH, { r: 10, stroke: rc, fill: 0x141d33, glow: it.r >= 2, bw: 2 });
+                const t1 = this.add.text(x - cw / 2 + 12, y - 8, `${cat.key === 'c' ? '👤' : it.ic} ${it.name}`, { fontSize: '14px', color: hex(rc), fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(5);
+                const t2 = this.add.text(x - cw / 2 + 12, y + 10, `${RAR[it.r].n} · ${tag}`, { fontSize: '11px', color: tag.includes('NEW') ? '#ffe066' : '#c8d4ee' }).setOrigin(0, 0.5).setDepth(5);
+                this.dyn.push(g, t1, t2);
+                this.tweens.add({ targets: [g, t1, t2], alpha: { from: 0, to: 1 }, delay: i * 70, duration: 150 });
             });
-            this.toastT.setText('十連結果' + ext).setY(175 + 10 * 26 + 24);
+            this.toastT.setText('十連結果' + ext).setY(168 + 5 * (rowH + 6) + 14);
         }
     }
 }
 
-// ================= 圖鑑 =================
+// ============================================================
+//  圖鑑（左：卡片格，右：詳情）
+// ============================================================
 class CodexScene extends Phaser.Scene {
     constructor() { super('CodexScene'); }
     create() {
         makeTextures(this); menuBg(this); title(this, '📖 圖鑑');
-        const w = this.cameras.main.width;
-        this.tab = 0; this.dyn = [];
+        this.tab = 0; this.dyn = []; this.picked = -1;
         let tot = S.uc.length + S.uw.length + S.up.length;
-        this.add.text(w / 2, 72, `收集 ${tot}/${TOTAL}　` + MILESTONES.map(m => `${m.n}件${S.claimed.includes(m.n) ? '✓' : '🎟' + m.t}`).join(' '), { fontSize: '12px', color: '#aac4ff', align: 'center', wordWrap: { width: w - 20 } }).setOrigin(0.5);
-        CATS.forEach((cat, i) => btn(this, w * (0.2 + i * 0.3), 118, cat.label, () => { this.tab = i; this.draw(); }, '#3a4a7a', 15));
-        this.detail = this.add.text(w / 2, this.cameras.main.height - 70, '點選卡片查看詳情', { fontSize: '14px', color: '#c8d4ee', align: 'center', wordWrap: { width: w - 30 } }).setOrigin(0.5);
-        btn(this, 56, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444', 14);
+        infoPill(this, W / 2, 84, `收集 ${tot}/${TOTAL}　` + MILESTONES.map(m => `${m.n}件${S.claimed.includes(m.n) ? '✓' : '🎟' + m.t}`).join('　'),
+            { fontSize: '13px', color: '#aac4ff', align: 'center', fontStyle: 'bold' }, { w: 760 });
+        this.detail = infoPill(this, 770, 300, '點選卡片查看詳情', { fontSize: '14px', color: '#d6e0f5', align: 'center', lineSpacing: 5, wordWrap: { width: 300 } }, { w: 340, minH: 330, d: 5 }).t;
+        btn(this, 60, 36, '‹ 返回', () => this.scene.start('MenuScene'), '#444a5a', 14);
         this.draw();
     }
     draw() {
         this.dyn.forEach(o => o.destroy()); this.dyn = [];
-        const w = this.cameras.main.width, cat = CATS[this.tab], cols = w < 600 ? 3 : 5, cw = Math.min(130, (w - 20) / cols - 8), ch = 112;
-        const sx = w / 2 - (cols * (cw + 8) - 8) / 2 + cw / 2;
+        const cat = CATS[this.tab], cw = 130, ch = 120, cols = 4, sx = 25 + cw / 2;
+        CATS.forEach((c, i) => this.dyn.push(btn(this, 90 + i * 140, 124, c.label, () => { this.tab = i; this.picked = -1; this.detail.setText('點選卡片查看詳情'); this.draw(); }, i === this.tab ? '#2a7de1' : '#2a3558', 15, { w: 118 })));
         cat.list.forEach((it, i) => {
-            let x = sx + (i % cols) * (cw + 8), y = 190 + Math.floor(i / cols) * (ch + 8) + ch / 2, got = S[cat.u].includes(it.id);
-            let rc = RAR[it.r].c;
-            let rect = this.add.rectangle(x, y, cw, ch, got ? 0x1d2b45 : 0x10151f).setStrokeStyle(3, got ? rc : 0x2a3040).setInteractive().on('pointerdown', () => this.show(cat, it, got));
-            this.dyn.push(rect);
-            let icon = cat.key === 'c' ? this.add.image(x, y - 14, 'hero' + it.id) : this.add.text(x, y - 14, it.ic, { fontSize: '34px' }).setOrigin(0.5);
-            if (!got) { if (icon.setTintFill) icon.setTintFill(0x1b2130); else icon.setAlpha(0.15); }
-            this.dyn.push(icon, this.add.text(x, y + 28, got ? it.name : '???', { fontSize: '14px', color: got ? '#fff' : '#555' }).setOrigin(0.5),
-                this.add.text(x, y + 46, RAR[it.r].n + (got ? starStr(cat.key, it.id) : ''), { fontSize: '11px', color: hex(got ? rc : 0x444444) }).setOrigin(0.5));
+            let x = sx + (i % cols) * (cw + 10), y = 170 + Math.floor(i / cols) * (ch + 10) + ch / 2, got = S[cat.u].includes(it.id);
+            let rc = RAR[it.r].c, sel = this.picked === it.id;
+            const g = this.add.graphics().setDepth(1);
+            drawPanel(g, x - cw / 2, y - ch / 2, cw, ch, { r: 12, fill: got ? 0x1a2744 : 0x0e1320, stroke: sel ? 0xffffff : got ? rc : 0x2a3040, glow: got || sel });
+            if (got) g.fillStyle(rc, 0.9).fillRoundedRect(x - cw / 2 + 10, y + ch / 2 - 10, cw - 20, 3, 1.5);   // 稀有度色條
+            let zone = this.add.zone(x, y, cw, ch).setDepth(6).setInteractive({ useHandCursor: true }).on('pointerdown', () => { this.picked = it.id; this.show(cat, it, got); this.draw(); });
+            let icon = cat.key === 'c' ? this.add.image(x, y - 20, 'hero' + it.id).setDepth(2) : this.add.text(x, y - 20, it.ic, { fontSize: '36px' }).setOrigin(0.5).setDepth(2);
+            if (!got) { if (icon.setTintFill) icon.setTintFill(0x1b2130); else icon.setAlpha(0.15); }   // 未擁有：剪影
+            this.dyn.push(g, zone, icon,
+                this.add.text(x, y + 28, got ? it.name : '???', { fontSize: '15px', color: got ? '#fff' : '#555', fontStyle: 'bold' }).setOrigin(0.5).setDepth(2),
+                this.add.text(x, y + 47, RAR[it.r].n + (got ? ' ' + starStr(cat.key, it.id) : ''), { fontSize: '11px', color: hex(got ? rc : 0x444444) }).setOrigin(0.5).setDepth(2));
         });
     }
     show(cat, it, got) {
         if (!got) { this.detail.setText('尚未解鎖，去抽獎看看吧！'); return; }
-        let d = `${it.name}（${RAR[it.r].n}）${starStr(cat.key, it.id)}\n${it.desc}\n每星加成：${STAR_TXT[cat.key]}`;
-        if (cat.key === 'w') d += `\n專武：${CHARACTERS[it.excl].name}（傷害+25%、數量+1）`;
-        if (cat.key === 'c') d += `\n血量${it.hp} 速度${it.speed} 傷害×${it.dmg} 射程${it.range}`;
+        let d = `${it.name}（${RAR[it.r].n}）${starStr(cat.key, it.id)}\n\n${it.desc}\n\n每星加成：${STAR_TXT[cat.key]}`;
+        if (cat.key === 'w') { const wm = wmetaOf(it.id); d += `\n專武：${CHARACTERS[it.excl].name}（傷害+25%、數量+1）\n專屬升級：${it.spec.name}\n養成：射速 Lv${wm.rate}　範圍 Lv${wm.range}　專屬 Lv${wm.spec}`; }
+        if (cat.key === 'c') { const m = metaOf(it.id); d += `\n\n血量${it.hp}　速度${it.speed}　傷害×${it.dmg}　射程${it.range}\n技能「${it.sk.name}」Lv${m.skill}：${it.sk.txt(m.skill)}`; }
         this.detail.setText(d);
     }
 }
 
-// ================= 遊戲本體 =================
+// ============================================================
+//  遊戲本體
+// ============================================================
 class GameScene extends Phaser.Scene {
     constructor() { super('GameScene'); }
 
     create(data) {
         makeTextures(this);
         this.cfg = data;
-        const ch = this.char = CHARACTERS[data.c], wp = this.wp = WEAPONS[data.w], ps = this.ps = data.p >= 0 ? scalePassive(PASSIVES[data.p], starOf('p', data.p)) : {};
+        const ch = this.char = CHARACTERS[data.c], wp = this.wp = WEAPONS[data.w];
+        const ps = this.ps = data.p >= 0 ? scalePassive(PASSIVES[data.p], starOf('p', data.p)) : {};
         const sc = starOf('c', ch.id), sw = starOf('w', wp.id);
-        this.excl = wp.excl === ch.id;                       // 專武啟動：傷害×1.25、數量+1
-        this.wn = wp.n + (this.excl ? 1 : 0);
+        const meta = metaOf(ch.id), wm = wmetaOf(wp.id);       // 局外養成資料（角色 / 武器各自獨立）
+
+        // ---------- 數值計算：基礎 × 升星 × 被動 × 養成 ----------
+        this.excl = wp.excl === ch.id;                          // 專武啟動：傷害×1.25、數量+1
+        const sp = wp.spec, spl = wm.spec;                      // 武器專屬升級
+        this.wn = wp.n + (this.excl ? 1 : 0) + (sp.kind === 'count' ? spl : 0);                          // 數量（散彈發數 / 環繞星數 / 光束道數）
+        this.pierceCount = (wp.type === 'pierce' ? this.wn : 0) + (sp.kind === 'pierce' ? Math.floor(spl / (sp.div || 1)) : 0);   // 穿透數
+        this.chainCount = (wp.type === 'chain' ? this.wn : 0) + (sp.kind === 'chain' ? spl : 0);          // 彈射數
         this.maxHp = Math.round(ch.hp * (1 + 0.05 * sc) * (ps.hpMul || 1)); this.hp = this.maxHp;
-        this.moveSpeed = Math.round(ch.speed * (ps.spdMul || 1));
-        this.attackDamage = BASE_ENEMY_HP * 0.4 * ch.dmg * (1 + 0.04 * sc) * wp.dmg * (1 + 0.05 * sw) * (ps.dmgMul || 1) * (this.excl ? 1.25 : 1);
-        this.attackDelay = ch.delay * wp.delay * (ps.atkMul || 1);
-        this.bulletRange = ch.range; this.bulletSpeed = 600;
-        this.exp = 0; this.maxExp = 5; this.level = 1; this.kills = 0;
-        this.elapsed = 0; this.lastSec = -1; this.slowUntil = 0; this.slowShown = false;
+        this.moveSpeed = Math.round(ch.speed * (ps.spdMul || 1) * (1 + 0.02 * meta.spd));
+        this.attackDamage = BASE_ENEMY_HP * 0.4 * ch.dmg * (1 + 0.04 * sc) * wp.dmg * (1 + 0.05 * sw) * (ps.dmgMul || 1) * (this.excl ? 1.25 : 1) * (1 + 0.05 * meta.atk);
+        this.attackDelay = ch.delay * wp.delay * (ps.atkMul || 1) / (1 + 0.05 * wm.rate);               // 射速養成：間隔縮短
+        this.bulletRange = Math.round(ch.range * (1 + 0.05 * wm.range)); this.bulletSpeed = 600;          // 射程養成
+        this.orbR = 90 * (1 + 0.05 * wm.range); this.orbCd = 450 / (1 + 0.05 * wm.rate);                  // 環繞星：範圍 → 半徑；射速 → 命中冷卻
+        this.defFlat = 0.4 * meta.def; this.redPct = 0.015 * meta.red;                                    // 防禦（固定減傷）/ 減傷（百分比）
+        this.critRate = 0.05 + 0.02 * meta.crit; this.critMul = 1.5 + 0.05 * meta.cdmg;                   // 暴擊
+
+        // ---------- 角色技能（innate 天生有；其他角色需養成到 Lv1）----------
+        const sl = this.sl = meta.skill; this.skOn = !!ch.innate || sl > 0;
+        this.dodgeChance = ch.trait === 'dodge' ? 0.2 + 0.02 * sl : 0;
+        this.nextNova = (10 - 0.4 * sl) * 1000;                // 星環：下次星爆時間
+        this.nextHeal = 15000;                                 // 曉光：下次回血時間
+        this.nextGale = 4000; this.galeUntil = 0;              // 翠風：疾風
+        this.thornCd = 0;                                      // 岩盾：反擊冷卻
+        this.frenzyNeed = Math.max(10, 20 - sl); this.frenzyDur = (5 + 0.3 * sl) * 1000; this.frenzyDmg = 0.4 + 0.02 * sl;   // 終焉：狂暴
+
+        // ---------- 戰鬥狀態 ----------
+        this.exp = 0; this.maxExp = 5; this.level = 1; this.kills = 0; this.pending = 0;      // pending = 尚未選擇的升級次數
+        this.elapsed = 0; this.lastSec = -1; this.lastUi = 0; this.slowUntil = 0; this.slowShown = false;
         this.frenzyUntil = 0; this.frenzyKills = 0; this.revived = false; this.orbA = 0;
         this.isGameOver = false; this.isUpgrading = false; this.isInvincible = true; this.hurtCD = false;
-        this.joystickDir = { x: 0, y: 0 }; this.touchPointer = null;
+        this.joystickDir = { x: 0, y: 0 }; this.touchPointer = null; this._pull = { x: 0, y: 0 };
+        // 本局金幣統計（結算時發放）
+        this.coinF = 0; this.bossCoins = 0; this.npcCoins = 0; this.npcTickets = 0; this.bossKills = 0;
+        this.bossActive = false; this.boss = null;
 
-        const W = this.cameras.main.width, H = this.cameras.main.height;
+        // ---------- 背景與圖層 ----------
         this.cameras.main.setBackgroundColor('#090d1c');
         this.bg = this.add.tileSprite(0, 0, W, H, 'bg').setOrigin(0).setScrollFactor(0).setDepth(0);
         this.stars = this.add.tileSprite(0, 0, W, H, 'stars').setOrigin(0).setScrollFactor(0).setDepth(1);
+        this.fieldGfx = this.add.graphics().setDepth(2);       // 星球引力場圈線
+        this.aimGfx = this.add.graphics().setDepth(149);       // 手動瞄準指示
+        this.bossTint = this.add.rectangle(W / 2, H / 2, W, H, 0xff0033, 0.08).setScrollFactor(0).setDepth(4).setVisible(false);   // BOSS 戰的紅色氛圍
 
         this.player = this.physics.add.sprite(0, 0, 'hero' + ch.id).setDepth(10);
         this.player.body.setCircle(16, 10, 10);
-        this.time.delayedCall(2000, () => { this.isInvincible = false; });
+        this.time.delayedCall(2000, () => { this.isInvincible = false; });                  // 開場 2 秒無敵
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
         this.hpGfx = this.add.graphics().setDepth(20);
 
-        // 浮動搖桿：點哪裡都行，以按下位置為中心，放開後消失
+        // ---------- 操作：浮動搖桿 + 鍵盤 + 空白鍵手動瞄準 ----------
         this.cursors = this.input.keyboard.createCursorKeys();
         this.wasd = this.input.keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' });
-        this.joyBase = this.add.circle(0, 0, 50, 0xffffff, 0.18).setStrokeStyle(2, 0xffffff, 0.4).setScrollFactor(0).setDepth(100).setVisible(false);
-        this.thumb = this.add.circle(0, 0, 24, 0xffffff, 0.5).setScrollFactor(0).setDepth(101).setVisible(false);
+        this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);   // 按住 = 手動瞄準模式
+        this.joyBase = this.add.circle(0, 0, 55, 0xffffff, 0.18).setStrokeStyle(2, 0xffffff, 0.4).setScrollFactor(0).setDepth(100).setVisible(false);
+        this.thumb = this.add.circle(0, 0, 26, 0xffffff, 0.5).setScrollFactor(0).setDepth(101).setVisible(false);
         this.input.on('pointerdown', (p) => {
             if (this.isGameOver || this.isUpgrading || this.touchPointer) return;
             this.touchPointer = p; this.baseX = p.x; this.baseY = p.y;
@@ -440,11 +827,13 @@ class GameScene extends Phaser.Scene {
         const up = (p) => { if (this.touchPointer && p.id === this.touchPointer.id) this.resetJoystick(); };
         this.input.on('pointerup', up); this.input.on('pointerupoutside', up);
 
+        // ---------- 物件群組 ----------
         this.enemies = this.physics.add.group(); this.bullets = this.physics.add.group();
         this.eBullets = this.physics.add.group(); this.gems = this.physics.add.group(); this.orbs = this.physics.add.group();
         this.sats = this.physics.add.group(); this.planets = this.physics.add.group(); this.ships = this.physics.add.group();
+        this.npcs = this.physics.add.group(); this.rifts = this.physics.add.group();
 
-        // 環繞星武器
+        // 環繞星武器：建立環繞球並設定碰撞傷害
         if (wp.type === 'orbit') {
             for (let i = 0; i < this.wn; i++) {
                 let o = this.add.circle(0, 0, 11, 0xffd24a).setStrokeStyle(3, 0xffffff).setDepth(30);
@@ -452,37 +841,48 @@ class GameScene extends Phaser.Scene {
             }
             const orbHit = (o, e) => {
                 if (!e.active || this.elapsed < (e.orbCd || 0)) return;
-                e.orbCd = this.elapsed + 450; this.damageEnemy(e, this.attackDamage);
+                e.orbCd = this.elapsed + this.orbCd; this.damageEnemy(e, this.dmgNow());
             };
             this.physics.add.overlap(this.orbs, this.enemies, orbHit);
             this.physics.add.overlap(this.orbs, this.sats, orbHit);
+            this.physics.add.overlap(this.orbs, this.npcs, orbHit);
         }
 
+        // ---------- HUD ----------
         this.expGfx = this.add.graphics().setScrollFactor(0).setDepth(200);
-        this.uiText = this.add.text(16, 16, '', { fontSize: '14px', color: '#fff', backgroundColor: '#00000088', padding: { x: 10, y: 5 } }).setScrollFactor(0).setDepth(200);
+        this.hudBg = this.add.graphics().setScrollFactor(0).setDepth(199);
+        this.uiText = this.add.text(24, 28, '', { fontSize: '13px', color: '#e6eeff', lineSpacing: 5 }).setScrollFactor(0).setDepth(200);
+        this.bossGfx = this.add.graphics().setScrollFactor(0).setDepth(200);                 // BOSS 血條
+        this.bossTxt = this.add.text(W / 2, 18, '👹 虛空吞噬者', { fontSize: '14px', color: '#fff', fontStyle: 'bold', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setScrollFactor(0).setDepth(201).setVisible(false);
+        this.markGfx = this.add.graphics().setScrollFactor(0).setDepth(190);                 // 螢幕外 裂縫 / 信使 的方向箭頭
         this.updateUI();
 
+        // ---------- 計時器 ----------
         this.attackTimer = this.time.addEvent({ delay: this.attackDelay, callback: this.fire, callbackScope: this, loop: true });
         this.spawnTimer = this.time.addEvent({ delay: 1500, callback: this.spawnEnemy, callbackScope: this, loop: true });
-        if (ch.trait === 'nova') this.time.addEvent({ delay: 10000, loop: true, callback: () => { if (!this.isGameOver && !this.isUpgrading) this.nova(200, this.attackDamage * 2.5); } });
-
-        this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
-        this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
-        this.physics.add.overlap(this.player, this.enemies, (p, e) => { if (e.active) this.takeDamage(e.contact); });
-        this.physics.add.overlap(this.player, this.eBullets, this.hitByShot, null, this);
-        // 衛星：可被攻擊，但與玩家無碰撞（可直接穿過）；星球、飛船：不可攻擊，碰到受傷
-        this.physics.add.overlap(this.bullets, this.sats, this.hitEnemy, null, this);
-        this.physics.add.overlap(this.player, this.planets, (p, o) => { if (o.active) this.takeDamage(o.dmg); });
-        this.physics.add.overlap(this.player, this.ships, (p, o) => { if (o.active) this.takeDamage(o.dmg); });
         this.time.addEvent({ delay: 12000, loop: true, callback: () => this.spawnPlanet() });
         this.time.addEvent({ delay: 8000, loop: true, callback: () => this.spawnShip() });
         this.time.addEvent({ delay: 6000, loop: true, callback: () => this.spawnSat() });
+        this.time.addEvent({ delay: 15000, loop: true, callback: () => { if (Math.random() < 0.35) this.spawnNpc(); } });   // 信使：每 15 秒 35% 機率
+        this.time.addEvent({ delay: RIFT_CHECK_SEC * 1000, loop: true, callback: () => this.rollRift() });                 // 裂縫：每 30 秒 20% 機率
+
+        // ---------- 碰撞 ----------
+        this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+        this.physics.add.overlap(this.bullets, this.sats, this.hitEnemy, null, this);
+        this.physics.add.overlap(this.bullets, this.npcs, this.hitEnemy, null, this);
+        this.physics.add.overlap(this.player, this.gems, this.collectGem, null, this);
+        this.physics.add.overlap(this.player, this.enemies, (p, e) => { if (e.active) this.takeDamage(e.contact); });
+        this.physics.add.overlap(this.player, this.eBullets, this.hitByShot, null, this);
+        // 衛星 / 信使：與玩家只重疊、不碰撞（可直接穿過）；星球、飛船：不可攻擊，碰到受傷
+        this.physics.add.overlap(this.player, this.planets, (p, o) => { if (o.active) this.takeDamage(o.dmg); });
+        this.physics.add.overlap(this.player, this.ships, (p, o) => { if (o.active) this.takeDamage(o.dmg); });
+        this.physics.add.overlap(this.player, this.rifts, this.enterRift, null, this);
     }
 
     resetJoystick() { this.touchPointer = null; this.joystickDir = { x: 0, y: 0 }; this.joyBase.setVisible(false); this.thumb.setVisible(false); }
 
     updateJoystick(p) {
-        let dx = p.x - this.baseX, dy = p.y - this.baseY, dist = Math.hypot(dx, dy), max = 50;
+        let dx = p.x - this.baseX, dy = p.y - this.baseY, dist = Math.hypot(dx, dy), max = 55;
         if (dist > 5) {
             let a = Math.atan2(dy, dx), c = Math.min(dist, max);
             this.thumb.setPosition(this.baseX + Math.cos(a) * c, this.baseY + Math.sin(a) * c);
@@ -490,6 +890,32 @@ class GameScene extends Phaser.Scene {
         } else { this.thumb.setPosition(this.baseX, this.baseY); this.joystickDir = { x: 0, y: 0 }; }
     }
 
+    // ------------------------------------------------------------
+    //  星球引力：回傳 (x, y) 位置受到的拉力（px/s）
+    //  每顆星球各有自己的強度與範圍（由半徑決定）：越大越強、越近越強（平方衰減）
+    // ------------------------------------------------------------
+    pullAt(x, y) {
+        const o = this._pull; o.x = 0; o.y = 0;
+        this.planets.getChildren().forEach((pl) => {
+            if (!pl.active) return;
+            const dx = pl.x - x, dy = pl.y - y, d = Math.hypot(dx, dy) || 1;
+            const k = Phaser.Math.Clamp(1 - Math.max(0, d - pl.pr) / pl.reach, 0, 1);   // 離表面越遠 k 越小，超出範圍為 0
+            if (k <= 0) return;
+            const f = pl.str * k * k;
+            o.x += dx / d * f; o.y += dy / d * f;
+        });
+        return o;
+    }
+
+    // 手動瞄準：滑鼠位置換算成世界座標並算出角度
+    manualAngle() {
+        const pt = this.input.activePointer; pt.updateWorldPoint(this.cameras.main);
+        return { a: Phaser.Math.Angle.Between(this.player.x, this.player.y, pt.worldX, pt.worldY), x: pt.worldX, y: pt.worldY };
+    }
+
+    // ------------------------------------------------------------
+    //  畫血條 / 引力場 / 瞄準線 / 螢幕外箭頭 / BOSS 血條（每幀）
+    // ------------------------------------------------------------
     drawBar(x, y, w, ratio, color) {
         this.hpGfx.fillStyle(0x000000, 0.7).fillRect(x - w / 2 - 1, y - 1, w + 2, 7);
         this.hpGfx.fillStyle(color, 1).fillRect(x - w / 2, y, w * Phaser.Math.Clamp(ratio, 0, 1), 5);
@@ -498,13 +924,76 @@ class GameScene extends Phaser.Scene {
         this.hpGfx.clear();
         let r = this.hp / this.maxHp;
         this.drawBar(this.player.x, this.player.y - 36, 46, r, r > 0.5 ? 0x44dd55 : r > 0.25 ? 0xffcc22 : 0xff3333);
-        this.enemies.getChildren().concat(this.sats.getChildren()).forEach((e) => { if (e.active && e.hp < e.maxHp) this.drawBar(e.x, e.y - e.r - 12, 28, e.hp / e.maxHp, 0xff5555); });
+        this.targets().forEach((e) => { if (e.active && !e.isBoss && e.hp < e.maxHp) this.drawBar(e.x, e.y - e.r - 12, 28, e.hp / e.maxHp, e.isNpc ? 0xffd24a : 0xff5555); });
+        // 星球引力場範圍（兩圈：外圈 = 引力影響邊界）
+        this.fieldGfx.clear();
+        this.planets.getChildren().forEach((pl) => {
+            if (!pl.active) return;
+            this.fieldGfx.lineStyle(2, 0x9ad0ff, 0.14).strokeCircle(pl.x, pl.y, pl.pr + pl.reach);
+            this.fieldGfx.lineStyle(2, 0x9ad0ff, 0.08).strokeCircle(pl.x, pl.y, pl.pr + pl.reach * 0.55);
+        });
+        // 手動瞄準指示線 + 準心
+        this.aimGfx.clear();
+        if (!this.isGameOver && !this.isUpgrading && this.spaceKey.isDown && this.wp.type !== 'orbit') {
+            const m = this.manualAngle(), p = this.player, L = this.bulletRange * (this.wp.type === 'beam' ? 1.2 : 1), c = Math.cos(m.a), s = Math.sin(m.a);
+            for (let t = 26; t < L; t += 24) this.aimGfx.lineStyle(3, this.char.color, 0.6).lineBetween(p.x + c * t, p.y + s * t, p.x + c * (t + 11), p.y + s * (t + 11));
+            this.aimGfx.lineStyle(2, 0xffffff, 0.95).strokeCircle(m.x, m.y, 13)
+                .lineBetween(m.x - 20, m.y, m.x - 8, m.y).lineBetween(m.x + 8, m.y, m.x + 20, m.y)
+                .lineBetween(m.x, m.y - 20, m.x, m.y - 8).lineBetween(m.x, m.y + 8, m.x, m.y + 20);
+        }
+        this.drawMarkers();
+        // BOSS 血條（固定在畫面上方中央）
+        this.bossGfx.clear();
+        const b = this.boss;
+        if (this.bossActive && b && b.active) {
+            const bw = 460, bx = W / 2 - bw / 2;
+            drawPanel(this.bossGfx, bx - 6, 30, bw + 12, 22, { r: 8, a: 0.8, bw: 1, stroke: 0xff3b5b });
+            this.bossGfx.fillStyle(0xff3b5b, 1).fillRoundedRect(bx, 36, bw * Phaser.Math.Clamp(b.hp / b.maxHp, 0, 1), 10, 4);
+            this.bossGfx.fillStyle(0xffffff, 0.3).fillRoundedRect(bx, 36, bw * Phaser.Math.Clamp(b.hp / b.maxHp, 0, 1), 4, 2);
+            this.bossTxt.setVisible(true);
+        } else this.bossTxt.setVisible(false);
+    }
+    // 裂縫（紫）與信使（金）在螢幕外時，於螢幕邊緣畫方向箭頭
+    drawMarkers() {
+        const g = this.markGfx; g.clear();
+        const cam = this.cameras.main, list = [];
+        this.rifts.getChildren().forEach(o => { if (o.active) list.push([o, 0xb455ff]); });
+        this.npcs.getChildren().forEach(o => { if (o.active) list.push([o, 0xffd24a]); });
+        list.forEach(([o, col]) => {
+            const sx = o.x - cam.scrollX, sy = o.y - cam.scrollY;
+            if (sx > 20 && sx < W - 20 && sy > 20 && sy < H - 20) return;      // 在畫面內就不用箭頭
+            const dx = sx - W / 2, dy = sy - H / 2, t = Math.min((W / 2 - 30) / Math.abs(dx || 1), (H / 2 - 30) / Math.abs(dy || 1));
+            const ex = W / 2 + dx * t, ey = H / 2 + dy * t, a = Math.atan2(dy, dx);
+            const pts = [{ x: ex + Math.cos(a) * 14, y: ey + Math.sin(a) * 14 }, { x: ex + Math.cos(a + 2.5) * 12, y: ey + Math.sin(a + 2.5) * 12 }, { x: ex + Math.cos(a - 2.5) * 12, y: ey + Math.sin(a - 2.5) * 12 }];
+            g.fillStyle(col, 0.9).lineStyle(2, 0xffffff, 0.9); g.fillPoints(pts, true); g.strokePoints(pts, true);
+        });
     }
 
-    dmgNow() { return this.attackDamage * (this.elapsed < this.frenzyUntil ? 1.4 : 1); }
+    // 目前實際傷害（含狂暴、怒焰加成）
+    dmgNow() {
+        let m = 1;
+        if (this.elapsed < this.frenzyUntil) m += this.frenzyDmg;                                                                   // 終焉：狂暴
+        if (this.skOn && this.char.trait === 'rage' && this.hp / this.maxHp < 0.5) m += 0.08 + 0.03 * this.sl;                      // 燼火：怒焰
+        return this.attackDamage * m;
+    }
 
+    // 角色技能的每幀計時（回血 / 疾風 / 星爆）
+    skillTick() {
+        if (!this.skOn) return;
+        const t = this.char.trait, e = this.elapsed;
+        if (t === 'heal' && e >= this.nextHeal) {
+            this.nextHeal = e + 15000; this.hp = Math.min(this.maxHp, this.hp + this.maxHp * (0.04 + 0.012 * this.sl));
+            this.popText(this.player.x, this.player.y - 44, '曙光', '#7fe3a0');
+        }
+        if (t === 'gale' && e >= this.nextGale) { this.nextGale = e + 8000; this.galeUntil = e + 2500; this.popText(this.player.x, this.player.y - 44, '疾風', '#66dd88'); }
+        if (t === 'nova' && e >= this.nextNova) { this.nextNova = e + (10 - 0.4 * this.sl) * 1000; this.nova(200 + 8 * this.sl, this.dmgNow() * (2.5 + 0.25 * this.sl)); }
+    }
+
+    // ------------------------------------------------------------
+    //  主迴圈
+    // ------------------------------------------------------------
     update(time, delta) {
-        let cam = this.cameras.main;
+        let cam = this.cameras.main, dt = delta / 1000;
         this.bg.tilePositionX = cam.scrollX * 0.5; this.bg.tilePositionY = cam.scrollY * 0.5;
         this.stars.tilePositionX = cam.scrollX * 0.9; this.stars.tilePositionY = cam.scrollY * 0.9;
         this.drawBars();
@@ -512,14 +1001,19 @@ class GameScene extends Phaser.Scene {
 
         this.elapsed += delta;
         let sec = Math.floor(this.elapsed / 1000);
-        if (sec !== this.lastSec) { this.lastSec = sec; this.updateUI(); this.cullFar(); }
-        if (this.ps.regen) this.hp = Math.min(this.maxHp, this.hp + this.ps.regen * delta / 1000);
+        if (sec !== this.lastSec) { this.lastSec = sec; this.cullFar(); }
+        if (this.elapsed - this.lastUi > 150) { this.lastUi = this.elapsed; this.updateUI(); }
+        if (this.ps.regen) this.hp = Math.min(this.maxHp, this.hp + this.ps.regen * dt);
+        this.skillTick();
         let want = this.elapsed < this.frenzyUntil ? this.attackDelay * 0.75 : this.attackDelay;   // 狂暴期間攻速加快
+        if (this.spaceKey.isDown) want *= 0.85;                                                    // 手動瞄準：連射更快
         if (this.attackTimer.delay !== want) this.attackTimer.delay = want;
 
+        // --- 玩家移動（鍵盤 / 搖桿）+ 引力 ---
+        let p = this.player;
         let slowed = this.elapsed < this.slowUntil;
-        if (slowed) { this.player.setTint(0x88ccff); this.slowShown = true; }
-        else if (this.slowShown) { this.player.clearTint(); this.slowShown = false; }
+        if (slowed) { p.setTint(0x88ccff); this.slowShown = true; }
+        else if (this.slowShown) { p.clearTint(); this.slowShown = false; }
         let vx = 0, vy = 0;
         if (this.cursors.left.isDown || this.wasd.left.isDown) vx -= 1;
         if (this.cursors.right.isDown || this.wasd.right.isDown) vx += 1;
@@ -528,31 +1022,65 @@ class GameScene extends Phaser.Scene {
         let mv = new Phaser.Math.Vector2(vx, vy);
         if (mv.lengthSq() > 0) mv.normalize();
         if (this.joystickDir.x !== 0 || this.joystickDir.y !== 0) mv.set(this.joystickDir.x, this.joystickDir.y);
-        mv.scale(this.moveSpeed * (slowed ? 0.55 : 1));
-        this.player.body.setVelocity(mv.x, mv.y);
+        let spd = this.moveSpeed * (slowed ? 0.55 : 1) * (this.elapsed < this.galeUntil ? 1 + 0.2 + 0.04 * this.sl : 1);   // 疾風加成
+        mv.scale(spd);
+        let g0 = this.pullAt(p.x, p.y);
+        p.body.setVelocity(mv.x + g0.x, mv.y + g0.y);
 
-        let p = this.player;
+        // --- 環繞星位置 ---
         if (this.wp.type === 'orbit') {
-            this.orbA += delta * 0.004;
-            this.orbs.getChildren().forEach((o, i) => { let a = this.orbA + i * 2 * Math.PI / this.wn; o.setPosition(p.x + Math.cos(a) * 90, p.y + Math.sin(a) * 90); });
+            this.orbA += delta * 0.004 * (1 + 0.03 * wmetaOf(this.wp.id).rate);
+            this.orbs.getChildren().forEach((o, i) => { let a = this.orbA + i * 2 * Math.PI / this.wn; o.setPosition(p.x + Math.cos(a) * this.orbR, p.y + Math.sin(a) * this.orbR); });
         }
+        // --- 敵人行動 ---
         this.enemies.getChildren().forEach((e) => {
             if (!e.active) return;
+            if (e.isBoss) { this.bossUpdate(e, p); return; }          // BOSS 有自己的行動邏輯（不受引力）
             let d = Phaser.Math.Distance.Between(e.x, e.y, p.x, p.y);
-            if (!e.keep) { this.physics.moveToObject(e, p, e.speed); return; }
-            if (d > e.keep + 40) this.physics.moveToObject(e, p, e.speed);
-            else if (d < e.keep - 60) this.physics.velocityFromRotation(Phaser.Math.Angle.Between(p.x, p.y, e.x, e.y), e.speed, e.body.velocity);
-            else e.body.setVelocity(0, 0);
-            if (this.elapsed >= e.nextShot && d < e.range) { this.enemyAttack(e); e.nextShot = this.elapsed + e.rate; }
+            if (!e.keep) this.physics.moveToObject(e, p, e.speed);     // 近戰：直線追玩家
+            else {                                                      // 遠程：保持距離並射擊
+                if (d > e.keep + 40) this.physics.moveToObject(e, p, e.speed);
+                else if (d < e.keep - 60) this.physics.velocityFromRotation(Phaser.Math.Angle.Between(p.x, p.y, e.x, e.y), e.speed, e.body.velocity);
+                else e.body.setVelocity(0, 0);
+                if (this.elapsed >= e.nextShot && d < e.range) { this.enemyAttack(e); e.nextShot = this.elapsed + e.rate; }
+            }
+            let g = this.pullAt(e.x, e.y); e.body.velocity.x += g.x; e.body.velocity.y += g.y;   // 敵人受星球引力
         });
+        // --- 信使 NPC：一直逃離玩家 ---
+        this.npcs.getChildren().forEach((n) => {
+            if (!n.active) return;
+            if (Phaser.Math.Distance.Between(n.x, n.y, p.x, p.y) > 1300 || this.elapsed - n.born > 45000) { n.destroy(); return; }   // 逃太遠 / 停留太久就消失
+            const away = Phaser.Math.Angle.Between(p.x, p.y, n.x, n.y) + Math.sin(this.elapsed / 400 + n.phase) * 0.6;   // 遠離玩家 + 左右蛇行
+            this.physics.velocityFromRotation(away, n.speed, n.body.velocity);
+            let g = this.pullAt(n.x, n.y); n.body.velocity.x += g.x; n.body.velocity.y += g.y;
+        });
+        // --- 裂縫壽命 ---
+        this.rifts.getChildren().forEach((r) => {
+            const age = this.elapsed - r.born;
+            if (age > RIFT_LIFE) { r.destroy(); return; }
+            r.setAlpha(age > RIFT_LIFE - 6000 ? (Math.floor(age / 250) % 2 ? 0.35 : 1) : 1);   // 最後 6 秒閃爍提醒
+        });
+        // --- 子彈：超出射程消失；飛行軌跡被星球引力彎曲 ---
+        const bend = (b) => { let g = this.pullAt(b.x, b.y); b.body.velocity.x += g.x * dt * 3; b.body.velocity.y += g.y * dt * 3; };
         this.bullets.getChildren().slice().forEach((b) => {
-            if (b.active && Phaser.Math.Distance.Between(b.startX, b.startY, b.x, b.y) >= this.bulletRange) b.destroy();
+            if (!b.active) return;
+            if (Phaser.Math.Distance.Between(b.startX, b.startY, b.x, b.y) >= this.bulletRange) { b.destroy(); return; }
+            bend(b);
         });
+        this.eBullets.getChildren().forEach((b) => { if (b.active) bend(b); });
+        // --- 經驗寶石：靠近玩家被吸附；其餘受星球引力 ---
         let mg = 120 * (this.ps.magnet || 1);
-        this.gems.getChildren().forEach((g) => { if (g.active && Phaser.Math.Distance.Between(p.x, p.y, g.x, g.y) < mg) this.physics.moveToObject(g, p, 240); });
+        this.gems.getChildren().forEach((g) => {
+            if (!g.active) return;
+            if (Phaser.Math.Distance.Between(p.x, p.y, g.x, g.y) < mg) this.physics.moveToObject(g, p, 240); else g.body.setVelocity(0, 0);
+            let gp = this.pullAt(g.x, g.y); g.body.velocity.x += gp.x; g.body.velocity.y += gp.y;
+        });
     }
 
-    // ---------- 玩家攻擊 ----------
+    // ------------------------------------------------------------
+    //  玩家攻擊
+    // ------------------------------------------------------------
+    // 在 grp（預設敵人）中找離 (x,y) 最近、且在 range 內的目標
     nearestTo(x, y, range, skip, grp) {
         let best = null, min = range;
         (grp || this.enemies).getChildren().forEach((e) => {
@@ -566,16 +1094,22 @@ class GameScene extends Phaser.Scene {
     fire() {
         if (this.isGameOver || this.isUpgrading) return;
         const T = this.wp.type;
-        if (T === 'orbit') return;
-        let rg = this.bulletRange * (T === 'beam' ? 1.2 : 1);
-        let tgt = this.nearestTo(this.player.x, this.player.y, rg) || this.nearestTo(this.player.x, this.player.y, rg, null, this.sats);   // 優先打敵人，沒有敵人才打衛星
-        if (!tgt) return;
-        let a = Phaser.Math.Angle.Between(this.player.x, this.player.y, tgt.x, tgt.y), dmg = this.dmgNow();
-        if (T === 'beam') { this.beam(a, dmg * 1.0); return; }
-        let n = T === 'shot' ? this.wn : 1;
-        for (let i = 0; i < n; i++) this.shoot(a + (i - (n - 1) / 2) * 0.22, dmg, T === 'pierce' ? this.wn : 0, T === 'chain' ? this.wn : 0, T === 'pierce' ? 800 : this.bulletSpeed);
+        if (T === 'orbit') return;                       // 環繞星是被動碰撞，不需要開火
+        let a, dmg = this.dmgNow();
+        if (this.spaceKey.isDown) {                      // 手動瞄準：依滑鼠位置射擊，不需要有目標
+            a = this.manualAngle().a;
+        } else {                                         // 自動瞄準：優先 信使 > 敵人 > 衛星
+            const px = this.player.x, py = this.player.y, rg = this.bulletRange * (T === 'beam' ? 1.2 : 1);
+            let tgt = this.nearestTo(px, py, rg, null, this.npcs) || this.nearestTo(px, py, rg) || this.nearestTo(px, py, rg, null, this.sats);
+            if (!tgt) return;
+            a = Phaser.Math.Angle.Between(px, py, tgt.x, tgt.y);
+        }
+        if (T === 'beam') { this.beam(a, dmg); return; }
+        let n = T === 'shot' ? this.wn : 1;              // 'shot' 類：數量 = 同時發射的子彈數（扇形排列）
+        for (let i = 0; i < n; i++) this.shoot(a + (i - (n - 1) / 2) * 0.22, dmg, this.pierceCount, this.chainCount, T === 'pierce' ? 800 : this.bulletSpeed);
     }
 
+    // 發射一顆子彈：pierce = 可再穿透幾隻，chain = 可再彈射幾次
     shoot(angle, dmg, pierce, chain, speed) {
         let b = this.add.circle(this.player.x, this.player.y, 12, this.char.color).setStrokeStyle(3, 0xffffff).setDepth(150);
         this.physics.add.existing(b); b.body.setCircle(12);
@@ -584,12 +1118,13 @@ class GameScene extends Phaser.Scene {
         this.physics.velocityFromRotation(angle, speed, b.body.velocity);
     }
 
+    // 光束：wn 道光束沿玩家等角度分布（1 道＝前方；2 道＝前後；4 道＝十字…）
     beam(a, dmg) {
         let L = this.bulletRange * 1.2, px = this.player.x, py = this.player.y;
         for (let k = 0; k < this.wn; k++) {
-            let ang = a + k * Math.PI * (k % 2 ? 1 : -1) * (k > 1 ? 0.5 : 1);   // 1 道：前方；2 道：前後；3+：十字
+            let ang = a + k * 2 * Math.PI / this.wn;
             let dx = Math.cos(ang) * L, dy = Math.sin(ang) * L;
-            this.targets().forEach((e) => {
+            this.targets().forEach((e) => {                  // 以「點到線段距離」判定命中
                 if (!e.active) return;
                 let t = Phaser.Math.Clamp(((e.x - px) * dx + (e.y - py) * dy) / (L * L), 0, 1);
                 if (Math.hypot(e.x - (px + dx * t), e.y - (py + dy * t)) <= 16 + e.r) this.damageEnemy(e, dmg * this.wp.dmg);
@@ -600,6 +1135,7 @@ class GameScene extends Phaser.Scene {
         }
     }
 
+    // 衝擊波：範圍內全部目標受傷，並清除範圍內的敵方子彈
     nova(r, dmg) {
         let p = this.player, ring = this.add.circle(p.x, p.y, r, 0xffd24a, 0.15).setStrokeStyle(4, 0xffd24a).setDepth(160);
         this.tweens.add({ targets: ring, scale: { from: 0.2, to: 1 }, alpha: 0, duration: 400, onComplete: () => ring.destroy() });
@@ -607,12 +1143,13 @@ class GameScene extends Phaser.Scene {
         this.eBullets.getChildren().slice().forEach((b) => { if (Phaser.Math.Distance.Between(p.x, p.y, b.x, b.y) < r) b.destroy(); });
     }
 
+    // 子彈命中：處理彈射 / 穿透 / 消失
     hitEnemy(b, e) {
         if (!b.active || !e.active || b.hits.has(e)) return;
         b.hits.add(e);
         let ex = e.x, ey = e.y;
         this.damageEnemy(e, b.damage);
-        if (b.chain > 0) {
+        if (b.chain > 0) {                               // 彈射：轉向附近另一隻敵人
             let nx = this.nearestTo(ex, ey, 260, b.hits);
             if (nx) {
                 b.chain--; b.startX = ex; b.startY = ey; b.setPosition(ex, ey);
@@ -621,64 +1158,86 @@ class GameScene extends Phaser.Scene {
             }
             b.destroy(); return;
         }
-        if (b.pierce > 0) { b.pierce--; return; }
+        if (b.pierce > 0) { b.pierce--; return; }        // 穿透：繼續飛
         b.destroy();
     }
 
+    // 對目標造成傷害（所有玩家傷害都經過這裡，所以暴擊在此判定）
     damageEnemy(e, dmg) {
         if (!e.active) return;
+        if (Math.random() < this.critRate) {             // 暴擊
+            dmg *= this.critMul;
+            this.popText(e.x, e.y - e.r - 14, Math.round(dmg * 10) / 10 + '!', '#ffd24a', 14);
+        }
         e.hp -= dmg;
         e.setTintFill(0xffffff);
         this.time.delayedCall(60, () => { if (e.active) e.clearTint(); });
         if (e.hp <= 0) this.killEnemy(e);
     }
 
+    // 目標死亡：信使發放獎勵 / BOSS 觸發升級 / 一般怪掉寶石與金幣
     killEnemy(e) {
+        if (e.isNpc) {                                   // 信使被打死：結算時多拿金幣或抽獎券
+            if (e.carry === 'ticket') { this.npcTickets += e.tickets; this.popText(e.x, e.y - 20, `+${e.tickets} 🎟`, '#ff9ad0', 20); }
+            else { this.npcCoins += e.coins; this.popText(e.x, e.y - 20, `+${e.coins} 🪙`, '#ffd24a', 20); }
+            let fx = this.add.circle(e.x, e.y, 20, 0xffd24a, 0.8).setDepth(6);
+            this.tweens.add({ targets: fx, scale: 3, alpha: 0, duration: 350, onComplete: () => fx.destroy() });
+            e.destroy(); return;
+        }
         this.kills++;
+        this.coinF += e.isSat ? 1 : Math.max(1, Math.round(e.gem));      // 擊殺金幣（結算發放）
         let fx = this.add.circle(e.x, e.y, e.r, 0xffffff, 0.8).setDepth(6);
         this.tweens.add({ targets: fx, scale: 2.2, alpha: 0, duration: 250, onComplete: () => fx.destroy() });
+        if (e.isBoss) { this.onBossDefeated(e); e.destroy(); return; }
         let g = this.add.circle(e.x, e.y, e.isSat ? 4 : e.gem > 1 ? 9 : 6, e.isSat ? 0xffe066 : 0x00ff88).setDepth(5);
         this.physics.add.existing(g); g.val = e.gem; this.gems.add(g);
         if (this.ps.heal) this.hp = Math.min(this.maxHp, this.hp + this.ps.heal);
-        if (this.char.trait === 'frenzy' && ++this.frenzyKills % 20 === 0) this.frenzyUntil = this.elapsed + 5000;
+        if (this.skOn && this.char.trait === 'frenzy' && ++this.frenzyKills % this.frenzyNeed === 0) this.frenzyUntil = this.elapsed + this.frenzyDur;
         e.destroy();
     }
 
-    // ---------- 敵人 ----------
+    // ------------------------------------------------------------
+    //  敵人 / 宇宙物件 / 信使 / 裂縫 的生成
+    // ------------------------------------------------------------
     spawnEnemy() {
-        if (this.isGameOver || this.isUpgrading) return;
+        if (this.isGameOver || this.isUpgrading || this.bossActive) return;     // BOSS 戰期間不刷小怪
         let t = this.elapsed / 1000;
-        let list = Object.entries(ENEMY_TYPES).filter(([k, T]) => t >= T.unlock);
+        let list = Object.entries(ENEMY_TYPES).filter(([k, T]) => t >= T.unlock);   // 依時間解鎖職業
         let r = Math.random() * list.reduce((s, it) => s + it[1].w, 0), pick = list[0];
         for (const it of list) { r -= it[1].w; if (r <= 0) { pick = it; break; } }
         const [kind, T] = pick;
-        let a = Math.random() * Math.PI * 2, d = Phaser.Math.Between(550, 650);
+        let a = Math.random() * Math.PI * 2, d = Phaser.Math.Between(550, 650);   // 剛好在畫面外
         let e = this.enemies.create(this.player.x + Math.cos(a) * d, this.player.y + Math.sin(a) * d, 'e_' + kind).setDepth(10);
         let S2 = T.r * 2 + 18;
         e.body.setCircle(T.r, S2 / 2 - T.r, S2 / 2 - T.r);
-        e.maxHp = e.hp = Math.max(1, Math.round(BASE_ENEMY_HP * T.hp * (1 + t / HP_GROWTH_SEC)));
-        let dm = 1 + t / DMG_GROWTH_SEC;
+        e.maxHp = e.hp = Math.max(1, Math.round(BASE_ENEMY_HP * T.hp * (1 + t / HP_GROWTH_SEC)));   // 血量隨時間成長
+        let dm = 1 + t / DMG_GROWTH_SEC;                                                            // 傷害隨時間成長
         e.dmg = Math.round(T.dmg * dm); e.contact = Math.max(1, Math.round(T.contact * dm));
         Object.assign(e, { kind, r: T.r, speed: T.speed, gem: T.gem, keep: T.keep, range: T.range, rate: T.rate, bspeed: T.bspeed, color0: T.color });
         e.nextShot = this.elapsed + Phaser.Math.Between(600, T.rate || 1000);
-        this.spawnTimer.delay = Math.max(350, 1500 - t * 10);
+        this.spawnTimer.delay = Math.max(350, 1500 - t * 10);                                       // 刷怪越來越快
     }
 
-    targets() { return this.enemies.getChildren().concat(this.sats.getChildren()); }
+    // 可被攻擊的目標：敵人（含 BOSS）+ 衛星 + 信使
+    targets() { return this.enemies.getChildren().concat(this.sats.getChildren(), this.npcs.getChildren()); }
 
+    // 以玩家為中心、距離 d 的隨機點
     edgePoint(d) { let a = Math.random() * Math.PI * 2; return { x: this.player.x + Math.cos(a) * d, y: this.player.y + Math.sin(a) * d }; }
 
-    spawnPlanet() {      // 星球：緩慢漂過，碰到受傷，不可攻擊
-        if (this.isGameOver || this.isUpgrading || this.elapsed < 8000 || this.planets.countActive() >= 3) return;
+    // 星球：緩慢漂過；引力強度與範圍依半徑決定
+    spawnPlanet() {
+        if (this.isGameOver || this.isUpgrading || this.bossActive || this.elapsed < 8000 || this.planets.countActive() >= 3) return;
         let i = Phaser.Math.Between(0, PLANETS.length - 1), P = PLANETS[i], pt = this.edgePoint(800), pl = this.player;
         let o = this.planets.create(pt.x, pt.y, 'planet' + i).setDepth(3), br = P.r * 0.9;
         o.body.setCircle(br, P.T / 2 - br, P.T / 2 - br);
+        o.pr = P.r; o.str = planetStrength(P.r); o.reach = planetReach(P.r);          // 半徑 / 引力強度 / 引力範圍
         o.dmg = Math.round(12 * (1 + this.elapsed / 1000 / DMG_GROWTH_SEC));
         this.physics.moveTo(o, pl.x + Phaser.Math.Between(-300, 300), pl.y + Phaser.Math.Between(-300, 300), Phaser.Math.Between(25, 45));
     }
 
-    spawnShip() {        // 飛船：預警紅線 0.8 秒後高速掠過，需要閃躲
-        if (this.isGameOver || this.isUpgrading || this.elapsed < 20000 || this.ships.countActive() >= 2) return;
+    // 飛船：預警紅線 0.8 秒後高速掠過，需要閃躲
+    spawnShip() {
+        if (this.isGameOver || this.isUpgrading || this.bossActive || this.elapsed < 20000 || this.ships.countActive() >= 2) return;
         let pt = this.edgePoint(650), pl = this.player;
         let ang = Phaser.Math.Angle.Between(pt.x, pt.y, pl.x + Phaser.Math.Between(-160, 160), pl.y + Phaser.Math.Between(-160, 160));
         let warn = this.add.graphics().setDepth(2);
@@ -686,7 +1245,7 @@ class GameScene extends Phaser.Scene {
         this.tweens.add({ targets: warn, alpha: { from: 0.3, to: 1 }, yoyo: true, repeat: 2, duration: 130 });
         this.time.delayedCall(800, () => {
             warn.destroy();
-            if (this.isGameOver) return;
+            if (this.isGameOver || this.bossActive) return;
             let o = this.ships.create(pt.x, pt.y, 'ship').setDepth(12);
             o.body.setCircle(12, 20, 20); o.setRotation(ang);
             o.dmg = Math.round(10 * (1 + this.elapsed / 1000 / DMG_GROWTH_SEC));
@@ -694,21 +1253,137 @@ class GameScene extends Phaser.Scene {
         });
     }
 
-    spawnSat() {         // 衛星：血量固定、不與玩家碰撞、擊毀掉 0.3 經驗
-        if (this.isGameOver || this.isUpgrading || this.sats.countActive() >= 4) return;
-        let pt = this.edgePoint(650), pl = this.player;
+    // 衛星：固定不動、血量固定、不與玩家碰撞、擊毀掉 0.3 經驗、不受引力影響
+    spawnSat() {
+        if (this.isGameOver || this.isUpgrading || this.bossActive || this.sats.countActive() >= 4) return;
+        let pt = this.edgePoint(Phaser.Math.Between(320, 560));
         let o = this.sats.create(pt.x, pt.y, 'sat').setDepth(8);
-        o.body.setCircle(14, 10, 10);
+        o.body.setCircle(14, 10, 10); o.body.setVelocity(0, 0);
         Object.assign(o, { maxHp: SAT_HP, hp: SAT_HP, r: 14, gem: SAT_EXP, isSat: true });
-        this.physics.moveTo(o, pl.x + Phaser.Math.Between(-250, 250), pl.y + Phaser.Math.Between(-250, 250), 45);
     }
 
+    // 信使：背著金幣或抽獎券一直逃跑；打死後結算時可多拿獎勵
+    spawnNpc() {
+        if (this.isGameOver || this.isUpgrading || this.bossActive || this.elapsed < 15000 || this.npcs.countActive() >= 1) return;
+        const t = this.elapsed / 1000, isTicket = Math.random() < 0.3;
+        const pt = this.edgePoint(Phaser.Math.Between(380, 480));
+        const n = this.npcs.create(pt.x, pt.y, isTicket ? 'npc1' : 'npc0').setDepth(11);
+        n.body.setCircle(14, 8, 8);
+        Object.assign(n, {
+            isNpc: true, r: 14, born: this.elapsed, phase: Math.random() * 6.28, speed: 150,
+            maxHp: Math.round(BASE_ENEMY_HP * 1.6 * (1 + t / HP_GROWTH_SEC)), carry: isTicket ? 'ticket' : 'coin',
+            coins: Math.round(40 + t * 0.6 + Phaser.Math.Between(0, 20)), tickets: 1
+        });
+        n.hp = n.maxHp;
+        this.banner(isTicket ? '🎟 抽獎券信使出現了！快追！' : '🪙 金幣信使出現了！快追！', '#ffd24a');
+    }
+
+    // 時空裂縫：每 30 秒 20% 機率在玩家附近出現，進入後挑戰 BOSS
+    rollRift() {
+        if (this.isGameOver || this.isUpgrading || this.bossActive || this.rifts.countActive() > 0) return;
+        if (Math.random() >= RIFT_CHANCE) return;
+        const p = this.player, sx = Phaser.Math.RND.sign() * Phaser.Math.Between(180, 380), sy = Phaser.Math.Between(-190, 190);
+        const r = this.rifts.create(p.x + sx, p.y + sy, 'rift').setDepth(7);
+        r.body.setCircle(40, 20, 20); r.born = this.elapsed;
+        this.tweens.add({ targets: r, angle: 360, duration: 3000, repeat: -1 });
+        this.banner('⚠ 時空裂縫出現了！進入挑戰 BOSS', '#c98bff');
+    }
+
+    // 玩家碰到裂縫：傳送進 BOSS 戰
+    enterRift(p, r) {
+        if (!r.active || this.bossActive || this.isGameOver) return;
+        this.bossActive = true; r.destroy();
+        // 不在碰撞回呼裡直接清場（避免破壞物理迴圈），延到下一個 tick
+        this.time.delayedCall(0, () => {
+            [this.enemies, this.sats, this.npcs, this.planets, this.ships, this.eBullets].forEach(g => g.clear(true, true));   // 清場：只剩玩家與 BOSS
+            this.cameras.main.flash(500, 150, 40, 255);
+            this.bossTint.setVisible(true);
+            this.banner('👹 BOSS 降臨！', '#ff5577');
+            this.spawnBoss();
+        });
+    }
+
+    // 生成 BOSS：血量、傷害隨時間成長
+    spawnBoss() {
+        const t = this.elapsed / 1000, pt = this.edgePoint(360), dm = 1 + t / DMG_GROWTH_SEC;
+        const b = this.enemies.create(pt.x, pt.y, 'boss').setDepth(12);
+        b.body.setCircle(52, 28, 28);
+        Object.assign(b, {
+            isBoss: true, r: 54, gem: 10, speed: 70, maxHp: Math.round(BASE_ENEMY_HP * BOSS_HP_MUL * (1 + t / HP_GROWTH_SEC)),
+            contact: Math.round(20 * dm), bdmg: Math.max(1, Math.round(10 * dm)),
+            state: 'move', atkIdx: 0, nextAtk: this.elapsed + 1800
+        });
+        b.hp = b.maxHp; this.boss = b;
+    }
+
+    // BOSS 行動：追擊玩家，每 2.3 秒輪流 環狀彈幕 → 扇形瞄準彈 → 預警衝刺
+    bossUpdate(e, p) {
+        const t = this.elapsed;
+        if (e.state === 'tele') {                                   // 衝刺前的預警：停住
+            e.body.setVelocity(0, 0);
+            if (t >= e.dashAt) { e.state = 'dash'; e.dashEnd = t + 650; this.physics.velocityFromRotation(e.dashAng, 560, e.body.velocity); }
+            return;
+        }
+        if (e.state === 'dash') { if (t >= e.dashEnd) { e.state = 'move'; e.body.setVelocity(0, 0); } return; }
+        this.physics.moveToObject(e, p, e.speed);
+        if (t >= e.nextAtk) { this.bossAttack(e, p); e.nextAtk = t + 2300; }
+    }
+    bossAttack(e, p) {
+        const k = e.atkIdx++ % 3, a = Phaser.Math.Angle.Between(e.x, e.y, p.x, p.y);
+        if (k === 0) {                                              // 環狀彈幕：14 發向四周
+            const off = Math.random() * 6.28;
+            for (let i = 0; i < 14; i++) this.enemyBullet(e.x, e.y, off + i * 2 * Math.PI / 14, 200, e.bdmg, 0xff5577, 8);
+        } else if (k === 1) {                                       // 扇形瞄準彈：5 發朝玩家
+            for (let i = -2; i <= 2; i++) this.enemyBullet(e.x, e.y, a + i * 0.22, 300, e.bdmg, 0xffaa33, 7);
+        } else {                                                    // 預警衝刺：先畫紅線，0.85 秒後高速衝過去
+            e.state = 'tele'; e.dashAng = a; e.dashAt = this.elapsed + 850;
+            const warn = this.add.graphics().setDepth(2);
+            warn.lineStyle(34, 0xff3333, 0.28).lineBetween(e.x, e.y, e.x + Math.cos(a) * 900, e.y + Math.sin(a) * 900);
+            this.tweens.add({ targets: warn, alpha: { from: 0.4, to: 1 }, yoyo: true, repeat: 2, duration: 140 });
+            this.time.delayedCall(850, () => warn.destroy());
+        }
+    }
+
+    // BOSS 被擊敗：給金幣、回血，並一次增加 5 級（每級可選一個強化）
+    onBossDefeated(e) {
+        this.bossActive = false; this.boss = null; this.bossTint.setVisible(false);
+        this.bossKills++;
+        const c = 150 + Math.floor(this.elapsed / 1000);
+        this.bossCoins += c;
+        this.popText(e.x, e.y - 30, `BOSS 擊破！+${c} 🪙`, '#ffd700', 22);
+        this.banner(`👹 BOSS 擊破！等級 +${BOSS_LEVELS}`, '#ffd700');
+        this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.3);
+        this.eBullets.clear(true, true);
+        for (let i = 0; i < BOSS_LEVELS; i++) { this.level++; this.maxExp = Math.floor(this.maxExp * 1.2); }   // BOSS 升級對經驗門檻的成長較溫和（×1.2）
+        this.pending += BOSS_LEVELS;
+        if (!this.isUpgrading) { this.isUpgrading = true; this.time.delayedCall(0, () => this.showUpgradeMenu()); }
+    }
+
+    // 畫面上方的短暫公告
+    banner(msg, color = '#fff') {
+        const t = this.add.text(W / 2, 96, msg, { fontSize: '22px', color, fontStyle: 'bold', stroke: '#000', strokeThickness: 5,
+            shadow: { offsetX: 0, offsetY: 3, color: '#000', blur: 8, fill: true } }).setOrigin(0.5).setScrollFactor(0).setDepth(400);
+        this.tweens.add({ targets: t, y: 76, alpha: { from: 1, to: 0 }, delay: 1400, duration: 900, onComplete: () => t.destroy() });
+    }
+
+    // 清掉離玩家太遠的宇宙物件
     cullFar() {
         [this.planets, this.ships, this.sats].forEach(g => g.getChildren().slice().forEach(o => {
             if (Phaser.Math.Distance.Between(o.x, o.y, this.player.x, this.player.y) > 1600) o.destroy();
         }));
     }
 
+    // 敵方子彈（共用）
+    enemyBullet(x, y, angle, speed, dmg, color, rad, slow = false) {
+        let b = this.add.circle(x, y, rad, color).setStrokeStyle(2, 0xffffff).setDepth(40);
+        this.physics.add.existing(b); b.body.setCircle(rad);
+        b.dmg = dmg; b.slow = slow;
+        this.eBullets.add(b);
+        this.physics.velocityFromRotation(angle, speed, b.body.velocity);
+        this.time.delayedCall(4000, () => { if (b.active) b.destroy(); });
+        return b;
+    }
+    // 一般敵人的攻擊：法師放延遲爆炸圈，其他射子彈
     enemyAttack(e) {
         if (e.kind === 'mage') {
             let x = this.player.x, y = this.player.y, dmg = e.dmg;
@@ -723,38 +1398,42 @@ class GameScene extends Phaser.Scene {
             return;
         }
         let rad = e.kind === 'archer' ? 5 : e.kind === 'control' ? 9 : 7;
-        let b = this.add.circle(e.x, e.y, rad, e.kind === 'control' ? 0x66ffff : e.color0).setStrokeStyle(2, 0xffffff).setDepth(40);
-        this.physics.add.existing(b); b.body.setCircle(rad);
-        b.dmg = e.dmg; b.slow = e.kind === 'control';
-        this.eBullets.add(b);
-        this.physics.velocityFromRotation(Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y), e.bspeed, b.body.velocity);
-        this.time.delayedCall(3500, () => { if (b.active) b.destroy(); });
+        this.enemyBullet(e.x, e.y, Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y), e.bspeed, e.dmg, e.kind === 'control' ? 0x66ffff : e.color0, rad, e.kind === 'control');
     }
 
     hitByShot(p, b) {
         if (!b.active) return;
-        if (b.slow && !this.isInvincible) this.slowUntil = this.elapsed + 2000;
+        if (b.slow && !this.isInvincible) this.slowUntil = this.elapsed + 2000;     // 控制型敵人的子彈會減速
         b.destroy(); this.takeDamage(b.dmg);
     }
 
-    popText(x, y, msg, color = '#fff') {
-        let t = this.add.text(x, y, msg, { fontSize: '16px', color, fontStyle: 'bold' }).setOrigin(0.5).setDepth(300);
+    popText(x, y, msg, color = '#fff', size = 17) {
+        let t = this.add.text(x, y, msg, { fontSize: size + 'px', color, fontStyle: 'bold', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setDepth(300);
         this.tweens.add({ targets: t, y: y - 40, alpha: 0, duration: 700, onComplete: () => t.destroy() });
     }
 
+    // ------------------------------------------------------------
+    //  玩家受傷：閃避 → 防禦（固定減）→ 減傷（百分比）→ 扣血 → 反擊技能 / 重生
+    // ------------------------------------------------------------
     takeDamage(amount) {
         if (this.isGameOver || this.isInvincible || this.hurtCD) return;
-        if (this.char.trait === 'dodge' && Math.random() < 0.2) {            // 影行：閃避
+        if (this.dodgeChance > 0 && Math.random() < this.dodgeChance) {                   // 影行：閃避
             this.hurtCD = true; this.time.delayedCall(300, () => { this.hurtCD = false; });
             this.popText(this.player.x, this.player.y - 40, '閃避', '#b455ff'); return;
         }
+        amount = Math.max(1, amount - this.defFlat);                                       // 防禦：每次受傷固定減少（至少 1）
+        amount = Math.max(1, Math.round(amount * (1 - this.redPct)));                      // 減傷：再乘上百分比
         this.hp -= amount; this.hurtCD = true;
         this.cameras.main.shake(100, 0.006);
         this.player.setTintFill(0xff3333);
         this.time.delayedCall(150, () => { if (this.player.active) this.player.clearTint(); });
         this.time.delayedCall(450, () => { this.hurtCD = false; });
+        if (this.hp > 0 && this.skOn && this.char.trait === 'thorn' && this.elapsed >= this.thornCd) {   // 岩盾：受傷時反擊衝擊波
+            this.thornCd = this.elapsed + 4000;
+            this.nova(120 + 4 * this.sl, this.dmgNow() * (1 + 0.35 * this.sl));
+        }
         if (this.hp <= 0) {
-            if (this.ps.revive && !this.revived) {                              // 被動「重生」
+            if (this.ps.revive && !this.revived) {                                         // 被動「重生」
                 this.revived = true; this.hp = this.maxHp * 0.5; this.isInvincible = true;
                 this.time.delayedCall(2000, () => { this.isInvincible = false; });
                 this.nova(260, this.attackDamage * 4); this.popText(this.player.x, this.player.y - 40, '重生！', '#ff3b6b'); return;
@@ -763,87 +1442,152 @@ class GameScene extends Phaser.Scene {
         }
     }
 
+    // 撿經驗寶石；經驗滿了就升級（可能一次升多級，累積在 pending）
     collectGem(p, g) {
         if (!g.active) return;
         this.exp += g.val; g.destroy();
-        if (this.exp >= this.maxExp && !this.isUpgrading) {
-            this.exp -= this.maxExp; this.level++; this.maxExp = Math.floor(this.maxExp * 1.5);
-            this.isUpgrading = true;
-            this.time.delayedCall(0, () => this.showUpgradeMenu());
+        let ups = 0;
+        while (this.exp >= this.maxExp) { this.exp -= this.maxExp; this.level++; this.maxExp = Math.floor(this.maxExp * 1.5); ups++; }
+        if (ups) {
+            this.pending += ups;
+            if (!this.isUpgrading) { this.isUpgrading = true; this.time.delayedCall(0, () => this.showUpgradeMenu()); }
         }
         this.updateUI();
     }
 
+    // ------------------------------------------------------------
+    //  結算畫面：金幣明細 + 抽獎券
+    // ------------------------------------------------------------
     gameOver() {
-        this.isGameOver = true; this.physics.pause(); this.resetJoystick();
-        const cw = this.cameras.main.width, chh = this.cameras.main.height, sec = this.elapsed / 1000;
-        let tk = Math.floor(sec / 120);                                          // 存活每 2 分鐘送 1 張抽獎券
-        S.tickets += tk; S.best = Math.max(S.best, sec); S.kills += this.kills; save();
-        this.add.rectangle(cw / 2, chh / 2, cw, chh, 0x000000, 0.6).setScrollFactor(0).setDepth(900);
-        const T = (y, s, o) => this.add.text(cw / 2, y, s, o).setOrigin(0.5).setScrollFactor(0).setDepth(999);
-        T(90, 'GAME OVER', { fontSize: '36px', color: '#ff3333', fontStyle: 'bold' });
-        T(145, `存活 ${fmtT(sec)}　等級 ${this.level}　擊殺 ${this.kills}`, { fontSize: '18px', color: '#fff' });
-        T(178, tk ? `🎟 獲得抽獎券 ×${tk}` : '存活滿 2 分鐘可獲得抽獎券', { fontSize: '15px', color: '#ffd700' });
-        const mk = (y, label, fn, bg) => {
-            const t = this.add.text(cw / 2, y, label, { fontSize: '22px', color: '#fff', backgroundColor: bg, padding: { x: 24, y: 8 } }).setOrigin(0.5).setScrollFactor(0).setDepth(999);
-            this.time.delayedCall(500, () => t.setInteractive({ useHandCursor: true }).on('pointerdown', fn));
-        };
-        mk(240, '再來一次', () => this.scene.restart(this.cfg), '#2a7de1');
-        mk(305, '去抽獎', () => this.scene.start('GachaScene'), '#b0508a');
-        mk(370, '回主頁', () => this.scene.start('MenuScene'), '#444');
+        this.isGameOver = true; this.physics.pause(); this.resetJoystick(); this.aimGfx.clear();
+        const sec = this.elapsed / 1000, cx = W / 2, cy = H / 2;
+        // 金幣來源：擊殺 / 存活（每 6 秒 1 枚）/ BOSS / 信使
+        const cKill = Math.floor(this.coinF), cTime = Math.floor(sec / 6), cBoss = this.bossCoins, cNpc = this.npcCoins;
+        const totalCoin = cKill + cTime + cBoss + cNpc;
+        const tkSurvive = Math.floor(sec / 120), totalTk = tkSurvive + this.npcTickets;     // 存活每 2 分鐘送 1 張 + 信使抽獎券
+        S.coins += totalCoin; S.tickets += totalTk; S.best = Math.max(S.best, sec); S.kills += this.kills; S.bossKills += this.bossKills; save();
+
+        this.add.rectangle(cx, cy, W, H, 0x000000, 0.68).setScrollFactor(0).setDepth(900);
+        panel(this, cx, cy, 640, 440, { stroke: 0xff3b3b, glow: true, fill: 0x160d16, fixed: true, d: 910, r: 18 });
+        const T = (x, y, s, o, oy = 0.5) => this.add.text(x, y, s, o).setOrigin(oy, 0.5).setScrollFactor(0).setDepth(999);
+        T(cx, cy - 190, 'GAME OVER', { fontSize: '38px', color: '#ff4444', fontStyle: 'bold', stroke: '#3a0000', strokeThickness: 7, shadow: { offsetX: 0, offsetY: 4, color: '#ff0000', blur: 16, fill: true } });
+        const stat = this.add.graphics().setScrollFactor(0).setDepth(920);
+        drawPanel(stat, cx - 290, cy - 160, 580, 38, { r: 10, fill: 0x0e1526, bw: 1, stroke: 0x3b5a96 });
+        T(cx, cy - 141, `⏱ ${fmtT(sec)}　⭐ Lv ${this.level}　💀 擊殺 ${this.kills}　👹 BOSS ${this.bossKills}`, { fontSize: '16px', color: '#fff', fontStyle: 'bold' });
+        // 金幣明細（左：項目，右：數量）
+        const rows = [['⚔️ 擊殺金幣', `+${cKill}`], ['⏳ 存活獎勵', `+${cTime}`], ['👹 BOSS 獎勵', `+${cBoss}`], ['🎒 信使戰利品（金幣）', `+${cNpc}`], ['🎟 信使戰利品（抽獎券）', `+${this.npcTickets}`], ['🎟 存活抽獎券（每 2 分鐘）', `+${tkSurvive}`]];
+        rows.forEach(([a, b], i) => {
+            const y = cy - 100 + i * 28, on = b !== '+0';
+            T(cx - 240, y, a, { fontSize: '15px', color: on ? '#e6eeff' : '#667794' }, 0);
+            T(cx + 240, y, b, { fontSize: '15px', color: on ? '#ffd24a' : '#667794', fontStyle: 'bold' }, 1);
+        });
+        const line = this.add.graphics().setScrollFactor(0).setDepth(999); line.lineStyle(1, 0x3b5a96, 1).lineBetween(cx - 240, cy + 72, cx + 240, cy + 72);
+        T(cx, cy + 98, `合計　🪙 +${totalCoin}　　🎟 +${totalTk}`, { fontSize: '22px', color: '#ffd700', fontStyle: 'bold', stroke: '#000', strokeThickness: 4 });
+        const o = { d: 950, fixed: true, delay: 500, w: 170 };
+        btn(this, cx - 190, cy + 165, '再來一次', () => this.scene.restart(this.cfg), '#2a7de1', 20, o);
+        btn(this, cx, cy + 165, '去養成', () => this.scene.start('UpgradeScene'), '#d08a2a', 20, o);
+        btn(this, cx + 190, cy + 165, '回主頁', () => this.scene.start('MenuScene'), '#444a5a', 20, o);
     }
 
+    // ------------------------------------------------------------
+    //  升級選單（局內）：橫向三張卡片；pending > 0 時會連續出現
+    // ------------------------------------------------------------
     showUpgradeMenu() {
         if (this.isGameOver) { this.isUpgrading = false; return; }
-        this.physics.pause(); this.resetJoystick(); this.player.body.setVelocity(0, 0);
-        const cw = this.cameras.main.width, ch = this.cameras.main.height;
+        this.physics.pause(); this.resetJoystick(); this.player.body.setVelocity(0, 0); this.aimGfx.clear();
         const pool = [
-            { text: '⚡ 移動速度 +20', fn: () => { this.moveSpeed += 20; } },
-            { text: '⚔️ 傷害 +1', fn: () => { this.attackDamage += 1; } },
-            { text: '🔫 攻擊速度 +15%', fn: () => { this.attackDelay = Math.max(200, this.attackDelay * 0.85); } },
-            { text: '🎯 射程 +80', fn: () => { this.bulletRange += 80; } },
-            { text: '❤️ 最大血量 +20 並回復 20', fn: () => { this.maxHp += 20; this.hp = Math.min(this.maxHp, this.hp + 20); } },
-            { text: '🩹 回復 40% 血量', fn: () => { this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.4); } }
+            { ic: '⚡', name: '移動速度', desc: '+20', fn: () => { this.moveSpeed += 20; } },
+            { ic: '⚔️', name: '傷害', desc: '+1', fn: () => { this.attackDamage += 1; } },
+            { ic: '🔫', name: '攻擊速度', desc: '+15%', fn: () => { this.attackDelay = Math.max(200, this.attackDelay * 0.85); } },
+            { ic: '🎯', name: '射程', desc: '+80', fn: () => { this.bulletRange += 80; } },
+            { ic: '❤️', name: '最大血量', desc: '+20，並回復 20', fn: () => { this.maxHp += 20; this.hp = Math.min(this.maxHp, this.hp + 20); } },
+            { ic: '🩹', name: '緊急治療', desc: '回復 40% 最大血量', fn: () => { this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.4); } }
         ];
         const options = Phaser.Utils.Array.Shuffle(pool).slice(0, 3);
+        const cw = 270, ch = 200, cy = 290;
         let ui = [
-            this.add.rectangle(cw / 2, ch / 2, cw, ch, 0x000000, 0.75).setScrollFactor(0).setDepth(300),
-            this.add.text(cw / 2, 100, '🎉 等級提升！請選擇一個強化：', { fontSize: '18px', color: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5).setScrollFactor(0).setDepth(301)
+            this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.78).setScrollFactor(0).setDepth(300),
+            panel(this, W / 2, 110, 460, 56, { stroke: 0xffd700, glow: true, fixed: true, d: 301 }),
+            this.add.text(W / 2, 110, `🎉 等級提升！ Lv ${this.level}`, { fontSize: '24px', color: '#ffd700', fontStyle: 'bold', stroke: '#5a3b00', strokeThickness: 4 }).setOrigin(0.5).setScrollFactor(0).setDepth(302),
+            this.add.text(W / 2, 158, this.pending > 1 ? `請選擇一個強化（還有 ${this.pending - 1} 次選擇）` : '請選擇一個強化', { fontSize: '14px', color: '#9bb4ee' }).setOrigin(0.5).setScrollFactor(0).setDepth(302)
         ];
         let chosen = false;
         options.forEach((o, i) => {
-            let y = 180 + i * 70;
-            let bg = this.add.rectangle(cw / 2, y, 320, 50, 0x222244, 0.95).setStrokeStyle(2, 0x00aaff).setInteractive({ useHandCursor: true }).setScrollFactor(0).setDepth(301);
-            let tx = this.add.text(cw / 2, y, o.text, { fontSize: '15px', color: '#fff' }).setOrigin(0.5).setScrollFactor(0).setDepth(302);
-            bg.on('pointerdown', () => {
+            const cx = W / 2 + (i - 1) * 295;
+            let g = this.add.graphics().setScrollFactor(0).setDepth(301);
+            const paint = (hv) => {
+                g.clear();
+                drawPanel(g, cx - cw / 2, cy - ch / 2, cw, ch, { fill: hv ? 0x24396a : 0x182647, stroke: hv ? 0xffd700 : 0x00aaff, glow: hv, a: 0.97 });
+                g.fillStyle(0x0b1226, 1).fillCircle(cx, cy - 45, 36).lineStyle(2, hv ? 0xffd700 : 0x00aaff, 1).strokeCircle(cx, cy - 45, 36);
+            };
+            paint(false);
+            let ic = this.add.text(cx, cy - 45, o.ic, { fontSize: '36px' }).setOrigin(0.5).setScrollFactor(0).setDepth(302);
+            let nm = this.add.text(cx, cy + 20, o.name, { fontSize: '21px', color: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setScrollFactor(0).setDepth(302);
+            let ds = this.add.text(cx, cy + 56, o.desc, { fontSize: '16px', color: '#7fe3a0', fontStyle: 'bold', align: 'center', wordWrap: { width: cw - 30 } }).setOrigin(0.5).setScrollFactor(0).setDepth(302);
+            let z = this.add.zone(cx, cy, cw, ch).setScrollFactor(0).setDepth(303).setInteractive({ useHandCursor: true });
+            z.on('pointerover', () => paint(true)).on('pointerout', () => paint(false));
+            z.on('pointerdown', () => {
                 if (chosen) return;
                 chosen = true; o.fn(); ui.forEach(el => el.destroy());
-                this.updateUI(); this.physics.resume();
-                this.time.delayedCall(150, () => { this.isUpgrading = false; });
+                this.pending--;
+                this.updateUI();
+                if (this.pending > 0) this.time.delayedCall(120, () => this.showUpgradeMenu());    // 還有待選的升級：再開一次
+                else { this.physics.resume(); this.time.delayedCall(150, () => { this.isUpgrading = false; }); }
             });
-            ui.push(bg, tx);
+            ui.push(g, ic, nm, ds, z);
         });
     }
 
+    // HUD：左上資訊面板 + 頂端經驗條
     updateUI() {
-        const t = this.elapsed / 1000;
+        const t = this.elapsed / 1000, manual = this.spaceKey && this.spaceKey.isDown;
+        const coinNow = Math.floor(this.coinF) + this.bossCoins + this.npcCoins;
         this.uiText.setText(
-            `Lv ${this.level}　⏱ ${fmtT(t)}　擊殺 ${this.kills}\n` +
-            `傷害 ${this.attackDamage.toFixed(1)}　速度 ${this.moveSpeed}　射程 ${this.bulletRange}\n` +
-            `敵人強度　血量 ×${(1 + t / HP_GROWTH_SEC).toFixed(1)}　傷害 ×${(1 + t / DMG_GROWTH_SEC).toFixed(1)}` +
-            (this.excl ? '\n✦ 專武啟動' : '') + (this.elapsed < this.frenzyUntil ? '　🔥 狂暴' : '')
+            `⭐ Lv ${this.level}　⏱ ${fmtT(t)}　💀 ${this.kills}　🪙 ${coinNow}\n` +
+            `❤️ ${Math.ceil(Math.max(0, this.hp))}/${this.maxHp}　⚔️ ${this.attackDamage.toFixed(1)}　👟 ${this.moveSpeed}　🎯 ${this.bulletRange}\n` +
+            `👾 敵人強度　血量 ×${(1 + t / HP_GROWTH_SEC).toFixed(1)}　傷害 ×${(1 + t / DMG_GROWTH_SEC).toFixed(1)}` +
+            (this.excl ? '\n✦ 專武啟動' : '') + (this.elapsed < this.frenzyUntil ? '\n🔥 狂暴中' : '') + (this.elapsed < this.galeUntil ? '\n🍃 疾風中' : '') +
+            (manual && this.wp.type !== 'orbit' ? '\n🎯 手動瞄準（連射）' : '')
         );
-        const w = this.cameras.main.width;
-        this.expGfx.clear().fillStyle(0x000000, 0.6).fillRect(0, 0, w, 8).fillStyle(0x00ff88, 1).fillRect(0, 0, w * Math.min(1, this.exp / this.maxExp), 8);
+        this.hudBg.clear();
+        drawPanel(this.hudBg, 12, 20, this.uiText.width + 24, this.uiText.height + 16, { r: 10, a: 0.74, bw: 1, stroke: 0x3b5a96 });
+        const ratio = Math.min(1, this.exp / this.maxExp);
+        this.expGfx.clear().fillStyle(0x000000, 0.6).fillRect(0, 0, W, 10).fillStyle(0x00ff88, 1).fillRect(0, 0, W * ratio, 10)
+            .fillStyle(0xffffff, 0.3).fillRect(0, 0, W * ratio, 4).lineStyle(1, 0x00ff88, 0.5).lineBetween(0, 10, W, 10);
     }
 }
 
-new Phaser.Game({
-    type: Phaser.AUTO, parent: 'game',
-    width: window.innerWidth, height: window.innerHeight,
+// ============================================================
+//  啟動遊戲：固定 960×540 橫向解析度，FIT 等比縮放並置中
+// ============================================================
+const game = new Phaser.Game({
+    type: Phaser.AUTO, parent: 'game', width: W, height: H, backgroundColor: '#000',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     physics: { default: 'arcade', arcade: { debug: false } },
-    scene: [MenuScene, LoadoutScene, GachaScene, CodexScene, GameScene]
+    scene: [MenuScene, LoadoutScene, UpgradeScene, GachaScene, CodexScene, GameScene]
 });
+
+// ============================================================
+//  強制橫向：直向時蓋上提示並暫停遊戲，轉回橫向後自動繼續
+// ============================================================
+(function () {
+    const rot = document.getElementById('rot');
+    let asleep = false;
+    function check() {
+        const portrait = window.innerHeight > window.innerWidth;
+        rot.style.display = portrait ? 'flex' : 'none';
+        if (portrait && !asleep) { asleep = true; game.loop.sleep(); }
+        else if (!portrait && asleep) { asleep = false; game.loop.wake(); }
+    }
+    window.addEventListener('resize', check);
+    window.addEventListener('orientationchange', () => setTimeout(check, 200));
+    check();
+    // 支援的瀏覽器（通常需要全螢幕）嘗試鎖定橫向；失敗就靠上面的提示畫面
+    window.addEventListener('pointerdown', function once() {
+        window.removeEventListener('pointerdown', once);
+        try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+    });
+})();
 </script>
 </body>
 </html>
