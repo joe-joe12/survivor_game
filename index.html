@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>虛空倖存者</title>
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; touch-action: none; }
@@ -181,7 +184,11 @@ function loadSave() {
     return d;
 }
 let S = loadSave();
-function save() { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) {} }
+function save() {
+    S._t = Date.now();
+    try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) {}
+    if (window.Cloud) Cloud.queue();
+}
 // 取得（必要時建立）某角色 / 武器的養成資料
 const metaOf = (id) => S.meta[id] || (S.meta[id] = { atk: 0, def: 0, red: 0, spd: 0, crit: 0, cdmg: 0, skill: 0 });
 const wmetaOf = (id) => S.wmeta[id] || (S.wmeta[id] = { rate: 0, range: 0, spec: 0 });
@@ -449,6 +456,14 @@ class MenuScene extends Phaser.Scene {
         items.forEach(([lb, sc, col], i) => btn(this, W / 2 + (i - 1.5) * 215, 310, lb, () => this.scene.start(sc), col, 26, { w: 190 }));
         infoPill(this, W / 2, 450, '移動：WASD／方向鍵／螢幕拖曳　　按住【空白鍵】：滑鼠手動瞄準連射\n金幣可在【養成】強化角色與武器　　每 30 秒有機會出現時空裂縫（BOSS）　　留意背著袋子逃跑的信使！',
             { fontSize: '13px', color: '#9bb4ee', align: 'center', lineSpacing: 5 }, { w: 860 });
+            // 右上角：Google 登入 / 登出
+        const u = window.Cloud && Cloud.user;
+        btn(this, W - 120, 36, u ? `☁ ${(u.displayName || '玩家').slice(0, 8)}｜登出` : '🔐 Google 登入',
+            () => u ? Cloud.logout() : Cloud.login(), u ? '#3a8a6a' : '#4285f4', 14, { w: 200 });
+        if (u && Cloud.st.status) this.add.text(W - 120, 62, Cloud.st.status, { fontSize: '11px', color: '#7f93b8' }).setOrigin(0.5);
+        const onCloud = () => { if (this.scene.isActive()) this.scene.restart(); };
+        window.addEventListener('cloudchange', onCloud);
+        this.events.once('shutdown', () => window.removeEventListener('cloudchange', onCloud));
     }
 }
 
@@ -1589,5 +1604,6 @@ const game = new Phaser.Game({
     });
 })();
 </script>
+<script src="cloud.js"></script>
 </body>
 </html>
