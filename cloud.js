@@ -4,10 +4,10 @@
 // ============================================================
 const FIREBASE_CONFIG = {
     // ↓↓↓ 換成你在 Firebase「專案設定 → 你的應用程式」看到的四個值（整串複製貼上）
-    apiKey: 'YOUR_API_KEY',
-    authDomain: 'YOUR_PROJECT.firebaseapp.com',
-    projectId: 'YOUR_PROJECT',
-    appId: 'YOUR_APP_ID'
+    apiKey: 'AIzaSyAK4qovtpWpiaOdt-GC8NDes6y53GaNyl8',
+    authDomain: 'surivior.firebaseapp.com',
+    projectId: 'surivior',
+    appId: '1:554138880772:web:d4ac9b5c56446d7dcade51'
 };
 
 const Cloud = (() => {
