@@ -28,7 +28,7 @@ class GameScene extends Phaser.Scene {
         
         this.isUpgrading = false;
         this.isGameOver = false;
-        this.isInvincible = true; // 新增開局無敵狀態
+        this.isInvincible = true;
         this.joystickDir = { x: 0, y: 0 };
         this.touchPointer = null;
     }
@@ -40,7 +40,7 @@ class GameScene extends Phaser.Scene {
 
         this.physics.world.setBounds(0, 0, this.mapSize, this.mapSize);
 
-        // 背景網格 (Depth 0)
+        // 背景網格
         let bgGraphics = this.add.graphics().setDepth(0);
         let gridSize = 80;
         bgGraphics.lineStyle(1, 0x333333, 0.8);
@@ -54,21 +54,19 @@ class GameScene extends Phaser.Scene {
         bgGraphics.lineStyle(6, 0xff2222, 1);
         bgGraphics.strokeRect(0, 0, this.mapSize, this.mapSize);
 
-        // 玩家 (Depth 10)
+        // 玩家 (藍色圓圈)
         this.player = this.add.circle(this.mapSize / 2, this.mapSize / 2, 15, 0x00aaff).setDepth(10);
         this.physics.add.existing(this.player);
         this.player.body.setCollideWorldBounds(true);
 
-        // 開局 2 秒無敵保護（避免開局被秒殺）
-        this.time.delayedCall(2000, () => {
-            this.isInvincible = false;
-        });
+        // 開局 2 秒無敵
+        this.time.delayedCall(2000, () => { this.isInvincible = false; });
 
         // 攝影機
         this.cameras.main.setBounds(0, 0, this.mapSize, this.mapSize);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
 
-        // 鍵盤輸入 (WASD + 方向鍵)
+        // 鍵盤輸入
         this.cursors = this.input.keyboard.createCursorKeys();
         this.wasd = this.input.keyboard.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -77,7 +75,7 @@ class GameScene extends Phaser.Scene {
             right: Phaser.Input.Keyboard.KeyCodes.D
         });
 
-        // 手機搖桿 (Depth 100+)
+        // 搖桿 UI
         this.baseX = 120;
         this.baseY = this.cameras.main.height - 120;
         this.joystickBase = this.add.circle(this.baseX, this.baseY, 50, 0xffffff, 0.2).setScrollFactor(0).setDepth(100);
@@ -119,14 +117,14 @@ class GameScene extends Phaser.Scene {
         this.bullets = this.physics.add.group();
         this.gems = this.physics.add.group();
 
-        // UI (Depth 200)
+        // UI
         this.uiText = this.add.text(16, 16, `等級: ${this.level} | 經驗: ${this.exp}/${this.maxExp}\n傷害: ${this.attackDamage} | 速度: ${this.moveSpeed}`, {
             fontSize: '16px', color: '#ffffff', backgroundColor: '#00000088', padding: { x: 10, y: 5 }
         }).setScrollFactor(0).setDepth(200);
 
-        // 計時器
+        // 定時任務
         this.attackTimer = this.time.addEvent({ delay: this.attackDelay, callback: this.autoAttack, callbackScope: this, loop: true });
-        this.time.addEvent({ delay: 1200, callback: this.spawnEnemy, callbackScope: this, loop: true });
+        this.time.addEvent({ delay: 1500, callback: this.spawnEnemy, callbackScope: this, loop: true });
 
         // 碰撞設定
         this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
@@ -160,7 +158,7 @@ class GameScene extends Phaser.Scene {
 
     update() {
         if (this.isGameOver || this.isUpgrading) {
-            this.player.body.setVelocity(0, 0);
+            if (this.player && this.player.body) this.player.body.setVelocity(0, 0);
             return;
         }
 
@@ -184,12 +182,17 @@ class GameScene extends Phaser.Scene {
 
         this.player.body.setVelocity(moveVec.x, moveVec.y);
 
-        this.gems.getChildren().forEach(gem => {
-            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
-            if (dist < 120) {
-                this.physics.moveToObject(gem, this.player, 220);
+        // 安全更新寶石吸附（防止引擎崩潰）
+        let gemsArray = this.gems.getChildren();
+        for (let i = gemsArray.length - 1; i >= 0; i--) {
+            let gem = gemsArray[i];
+            if (gem && gem.active) {
+                let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, gem.x, gem.y);
+                if (dist < 120) {
+                    this.physics.moveToObject(gem, this.player, 220);
+                }
             }
-        });
+        }
     }
 
     autoAttack() {
@@ -197,33 +200,38 @@ class GameScene extends Phaser.Scene {
         let nearestEnemy = null;
         let minDistance = 1000;
 
-        this.enemies.getChildren().forEach(enemy => {
-            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
-            if (dist < minDistance) {
-                minDistance = dist;
-                nearestEnemy = enemy;
+        let enemiesArray = this.enemies.getChildren();
+        for (let i = 0; i < enemiesArray.length; i++) {
+            let enemy = enemiesArray[i];
+            if (enemy && enemy.active) {
+                let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearestEnemy = enemy;
+                }
             }
-        });
+        }
 
         if (nearestEnemy) {
-            let bullet = this.add.circle(this.player.x, this.player.y, 18, 0xffff00).setDepth(150);
+            let bullet = this.add.circle(this.player.x, this.player.y, 14, 0xffff00).setDepth(150);
             bullet.setStrokeStyle(3, 0xff6600);
             this.physics.add.existing(bullet);
-            bullet.body.setCircle(18);
+            bullet.body.setCircle(14);
 
             bullet.damage = this.attackDamage;
             this.bullets.add(bullet);
 
             let angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, nearestEnemy.x, nearestEnemy.y);
             this.physics.velocityFromRotation(angle, 600, bullet.body);
-            this.time.delayedCall(3000, () => bullet.destroy());
+            this.time.delayedCall(3000, () => {
+                if (bullet && bullet.active) bullet.destroy();
+            });
         }
     }
 
     spawnEnemy() {
         if (this.isGameOver || this.isUpgrading) return;
-        
-        // 確保敵人強制產生在視野外（半徑 550~650 像素外）
+
         let angle = Math.random() * Math.PI * 2;
         let spawnDist = Phaser.Math.Between(550, 650);
         let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * spawnDist, 50, this.mapSize - 50);
@@ -234,11 +242,12 @@ class GameScene extends Phaser.Scene {
         enemy.hp = 1;
         this.enemies.add(enemy);
 
-        // 敵人緩慢往玩家移動（速度降為 60）
         this.physics.moveToObject(enemy, this.player, 60);
     }
 
     hitEnemy(bullet, enemy) {
+        if (!bullet.active || !enemy.active) return;
+
         enemy.hp -= bullet.damage;
         bullet.destroy();
 
@@ -251,6 +260,7 @@ class GameScene extends Phaser.Scene {
     }
 
     collectGem(player, gem) {
+        if (!gem.active) return;
         gem.destroy();
         this.exp += 1;
 
@@ -265,11 +275,11 @@ class GameScene extends Phaser.Scene {
     }
 
     triggerGameOver(player, enemy) {
-        if (this.isGameOver || this.isInvincible) return; // 無敵時間內不會死亡
+        if (this.isGameOver || this.isInvincible || !enemy.active) return;
         this.isGameOver = true;
         this.physics.pause();
 
-        this.add.text(this.cameras.main.width / 2, 50, 'GAME OVER!\n(點擊畫面重新開始)', {
+        this.add.text(this.cameras.main.width / 2, 80, 'GAME OVER!\n(點擊畫面重新開始)', {
             fontSize: '28px',
             color: '#ff2222',
             fontStyle: 'bold',
