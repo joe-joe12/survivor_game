@@ -7,6 +7,7 @@ const FIREBASE_CONFIG = {
     apiKey: 'AIzaSyAK4qovtpWpiaOdt-GC8NDes6y53GaNyl8',
     authDomain: 'surivior.firebaseapp.com',
     projectId: 'surivior',
+    databaseURL: 'https://surivior-default-rtdb.asia-southeast1.firebasedatabase.app',   // Realtime Database（連機戰鬥用）
     appId: '1:554138880772:web:d059e5c0d552d431cade51'
 };
 
