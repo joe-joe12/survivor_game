@@ -35,17 +35,43 @@ const Cloud = (() => {
         document.addEventListener('visibilitychange', () => { if (document.hidden && timer) push(); });
     }
 
-    // 登入：電腦用彈窗，彈窗被擋或不支援時改用整頁跳轉
-    async function login() {
-        if (!auth) { alert('尚未設定 Firebase，請先填入 cloud.js 的 FIREBASE_CONFIG'); return; }
+    // 登入：先試彈窗；被擋時（iPhone Safari 常見）跳出真正的網頁按鈕，
+    // 由使用者再點一次（真實點擊才能開彈窗）。redirect 只當最後手段。
+    function popupLogin() {
         const provider = new firebase.auth.GoogleAuthProvider();
         provider.setCustomParameters({ prompt: 'select_account' });
-        try { await auth.signInWithPopup(provider); }
-        catch (e) {
-            if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) {
-                try { await auth.signInWithRedirect(provider); }
-                catch (e2) { alert('登入失敗：' + e2.code + '\n' + e2.message); }
+        return auth.signInWithPopup(provider);
+    }
+    function showLoginDialog() {
+        if (document.getElementById('cloud-login-dlg')) return;
+        const wrap = document.createElement('div');
+        wrap.id = 'cloud-login-dlg';
+        wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:99999;display:flex;align-items:center;justify-content:center;font-family:sans-serif';
+        wrap.innerHTML = '<div style="background:#1b1f3a;border:2px solid #4285f4;border-radius:14px;padding:22px 26px;text-align:center;color:#fff;max-width:80%">'
+            + '<div style="font-size:16px;margin-bottom:14px">請點下面的按鈕完成 Google 登入</div>'
+            + '<button id="cloud-login-go" style="background:#4285f4;color:#fff;border:0;border-radius:10px;padding:12px 26px;font-size:18px;font-weight:bold">🔐 Google 登入</button>'
+            + '<div><button id="cloud-login-cancel" style="margin-top:14px;background:none;color:#aaa;border:0;font-size:14px">取消</button></div></div>';
+        document.body.appendChild(wrap);
+        const close = () => wrap.remove();
+        document.getElementById('cloud-login-cancel').onclick = close;
+        document.getElementById('cloud-login-go').onclick = async () => {
+            try { await popupLogin(); close(); }
+            catch (e) {
+                close();
+                if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) {
+                    try { await auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider()); }
+                    catch (e2) { alert('登入失敗：' + e2.code + '\n' + e2.message); }
+                } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+                    alert('登入失敗：' + e.code + '\n' + e.message);
+                }
             }
+        };
+    }
+    async function login() {
+        if (!auth) { alert('尚未設定 Firebase，請先填入 cloud.js 的 FIREBASE_CONFIG'); return; }
+        try { await popupLogin(); }
+        catch (e) {
+            if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) showLoginDialog();
             else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') alert('登入失敗：' + e.code + '\n' + e.message);
         }
     }
