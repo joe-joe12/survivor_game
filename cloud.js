@@ -3,11 +3,11 @@
 //  放在 index.html 的 </script> 之後、</body> 之前載入
 // ============================================================
 const FIREBASE_CONFIG = {
-    // ↓↓↓ 換成你在 Firebase「專案設定 → 你的應用程式」看到的四個值（整串複製貼上）
+    // ↓↓↓ 與 Firebase「專案設定 → 你的應用程式」的值一致（appId 已更新）
     apiKey: 'AIzaSyAK4qovtpWpiaOdt-GC8NDes6y53GaNyl8',
     authDomain: 'surivior.firebaseapp.com',
     projectId: 'surivior',
-    appId: '1:554138880772:web:d4ac9b5c56446d7dcade51'
+    appId: '1:554138880772:web:d059e5c0d552d431cade51'
 };
 
 const Cloud = (() => {
@@ -21,7 +21,11 @@ const Cloud = (() => {
         if (!window.firebase || FIREBASE_CONFIG.apiKey.startsWith('YOUR')) { st.status = '尚未設定 Firebase'; return; }
         firebase.initializeApp(FIREBASE_CONFIG);
         auth = firebase.auth(); db = firebase.firestore();
-        auth.getRedirectResult().catch(() => {});           // 手機改用 redirect 登入時，回來這裡接結果
+        // 手機改用 redirect 登入時，回來這裡接結果；失敗時顯示錯誤碼，方便除錯
+        auth.getRedirectResult().catch((e) => {
+            st.status = '登入失敗：' + e.code;
+            alert('登入失敗：' + e.code + '\n' + e.message);
+        });
         auth.onAuthStateChanged(async (u) => {
             st.user = u; st.ready = true;
             if (u) { try { await pull(); } catch (e) { st.status = '同步失敗：' + e.message; } }
@@ -38,7 +42,10 @@ const Cloud = (() => {
         provider.setCustomParameters({ prompt: 'select_account' });
         try { await auth.signInWithPopup(provider); }
         catch (e) {
-            if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) auth.signInWithRedirect(provider);
+            if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) {
+                try { await auth.signInWithRedirect(provider); }
+                catch (e2) { alert('登入失敗：' + e2.code + '\n' + e2.message); }
+            }
             else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') alert('登入失敗：' + e.code + '\n' + e.message);
         }
     }
